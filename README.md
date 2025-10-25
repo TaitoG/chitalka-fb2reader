@@ -1,16 +1,9 @@
-# chitalka
+# Chitalka - FB2 Reader
 
-A new Flutter project.
+A simple and convenient e-book reader for FB2 format on Android and IOS.
 
-## Getting Started
+## Features
 
-This project is a starting point for a Flutter application.
+- FB2 Book Reading - Full support for FictionBook 2.0 format
 
-A few resources to get you started if this is your first Flutter project:
-
-- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
-
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+- Built-in Dictionary - Instant word translation with tap
