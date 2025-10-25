@@ -1,0 +1,313 @@
+// services/pagination/pagination_service.dart
+
+import 'package:flutter/material.dart';
+import 'package:hive/hive.dart';
+import 'package:chitalka/models/book.dart';
+import 'package:chitalka/models/pagination_cache.dart';
+import 'package:chitalka/models/page_data.dart';
+import 'package:chitalka/models/word_token.dart';
+import 'package:chitalka/core/tokenizer.dart';
+
+class PaginationService {
+  Box<PaginationCache>? _cacheBox;
+  PaginationCache? _currentCache;
+  final Map<int, List<PageData>> _sectionPages = {};
+  final Set<int> _paginatedSections = {};
+  bool _isBackgroundPaginationRunning = false;
+
+  // Callbacks для уведомления UI
+  VoidCallback? onPaginationUpdate;
+  VoidCallback? onBackgroundPaginationComplete;
+
+  // Геттеры
+  bool get isBackgroundPaginationRunning => _isBackgroundPaginationRunning;
+  Map<int, List<PageData>> get sectionPages => _sectionPages;
+  PaginationCache? get currentCache => _currentCache;
+
+  // Инициализация кеша
+  Future<void> initializeCache() async {
+    _cacheBox = await Hive.openBox<PaginationCache>('pagination_cache');
+  }
+
+  // Загрузка или создание пагинации
+  Future<void> loadOrCreatePagination({
+    required Book book,
+    required String? cacheKey,
+    required double fontSize,
+    required double lineHeight,
+    required Size screenSize,
+    required int currentSectionIndex,
+  }) async {
+    if (cacheKey == null) return;
+
+    _currentCache = _cacheBox?.get(cacheKey);
+
+    if (_currentCache != null &&
+        _currentCache!.isValid(fontSize, lineHeight, screenSize.width, screenSize.height)) {
+      // Загружаем из кеша
+      await loadSectionFromCache(currentSectionIndex);
+      preloadNearbySections(currentSectionIndex, book.sections.length);
+    } else {
+      // Создаём новый кеш
+      _currentCache = PaginationCache(
+        bookFilePath: cacheKey,
+        fontSize: fontSize,
+        lineHeight: lineHeight,
+        screenWidth: screenSize.width,
+        screenHeight: screenSize.height,
+        sections: {},
+        createdAt: DateTime.now(),
+      );
+
+      await paginateSection(
+        book: book,
+        sectionIndex: currentSectionIndex,
+        fontSize: fontSize,
+        lineHeight: lineHeight,
+        screenSize: screenSize,
+      );
+
+      startBackgroundPagination(
+        book: book,
+        fontSize: fontSize,
+        lineHeight: lineHeight,
+        screenSize: screenSize,
+      );
+    }
+  }
+
+  // Загрузка секции из кеша
+  Future<void> loadSectionFromCache(int sectionIndex) async {
+    if (_currentCache?.sections.containsKey(sectionIndex) ?? false) {
+      final cachedSection = _currentCache!.sections[sectionIndex]!;
+      _sectionPages[sectionIndex] = cachedSection.pages.map((pageData) {
+        return PageData(
+          text: pageData.text,
+          tokens: pageData.tokens.map((tokenData) {
+            return WordToken(
+              text: tokenData.text,
+              word: tokenData.word,
+              startOffset: tokenData.startOffset,
+            );
+          }).toList(),
+        );
+      }).toList();
+
+      _paginatedSections.add(sectionIndex);
+      onPaginationUpdate?.call();
+    }
+  }
+
+  // Предзагрузка соседних секций
+  void preloadNearbySections(int currentSectionIndex, int totalSections) {
+    final sectionsToLoad = <int>[];
+
+    if (currentSectionIndex > 0) {
+      sectionsToLoad.add(currentSectionIndex - 1);
+    }
+    if (currentSectionIndex < totalSections - 1) {
+      sectionsToLoad.add(currentSectionIndex + 1);
+    }
+
+    for (final sectionIndex in sectionsToLoad) {
+      if (!_paginatedSections.contains(sectionIndex)) {
+        loadSectionFromCache(sectionIndex);
+      }
+    }
+  }
+
+  // Запуск фоновой пагинации
+  void startBackgroundPagination({
+    required Book book,
+    required double fontSize,
+    required double lineHeight,
+    required Size screenSize,
+  }) {
+    if (_isBackgroundPaginationRunning) return;
+    _isBackgroundPaginationRunning = true;
+
+    Future.delayed(const Duration(milliseconds: 500), () {
+      _paginateNextSection(
+        book: book,
+        fontSize: fontSize,
+        lineHeight: lineHeight,
+        screenSize: screenSize,
+      );
+    });
+  }
+
+  // Пагинация следующей секции
+  Future<void> _paginateNextSection({
+    required Book book,
+    required double fontSize,
+    required double lineHeight,
+    required Size screenSize,
+  }) async {
+    if (!_isBackgroundPaginationRunning) return;
+
+    int? nextSection;
+    for (int i = 0; i < book.sections.length; i++) {
+      if (!_paginatedSections.contains(i)) {
+        nextSection = i;
+        break;
+      }
+    }
+
+    if (nextSection != null) {
+      await paginateSection(
+        book: book,
+        sectionIndex: nextSection,
+        fontSize: fontSize,
+        lineHeight: lineHeight,
+        screenSize: screenSize,
+        background: true,
+      );
+
+      Future.delayed(const Duration(milliseconds: 100), () {
+        _paginateNextSection(
+          book: book,
+          fontSize: fontSize,
+          lineHeight: lineHeight,
+          screenSize: screenSize,
+        );
+      });
+    } else {
+      _isBackgroundPaginationRunning = false;
+      await saveCacheToHive();
+      onBackgroundPaginationComplete?.call();
+    }
+  }
+
+  // Основная функция пагинации секции
+  Future<void> paginateSection({
+    required Book book,
+    required int sectionIndex,
+    required double fontSize,
+    required double lineHeight,
+    required Size screenSize,
+    EdgeInsets? mediaPadding,
+    bool background = false,
+  }) async {
+    if (_paginatedSections.contains(sectionIndex)) return;
+
+    final section = book.sections[sectionIndex];
+    final paragraphs = section.paragraphs;
+    final padding = const EdgeInsets.all(24.0);
+
+    final effectiveMediaPadding = mediaPadding ?? EdgeInsets.zero;
+    final availableHeight = screenSize.height -
+        effectiveMediaPadding.vertical -
+        padding.vertical -
+        32;
+
+    final textStyle = TextStyle(fontSize: fontSize, height: lineHeight);
+    final textPainter = TextPainter(
+      textDirection: TextDirection.ltr,
+      maxLines: null,
+    );
+
+    List<PageData> pages = [];
+    StringBuffer currentPageText = StringBuffer();
+    List<WordToken> currentPageTokens = [];
+
+    for (final paragraph in paragraphs) {
+      final paragraphTokens = TextTokenizer.tokenize(paragraph + '\n\n');
+      final paragraphText = paragraphTokens.map((t) => t.text).join();
+
+      final tentativeText = currentPageText.toString() + paragraphText;
+      textPainter.text = TextSpan(text: tentativeText, style: textStyle);
+      textPainter.layout(maxWidth: screenSize.width - padding.horizontal);
+
+      if (textPainter.height <= availableHeight) {
+        currentPageText.write(paragraphText);
+        currentPageTokens.addAll(paragraphTokens);
+        continue;
+      }
+
+      StringBuffer tempText = StringBuffer(currentPageText.toString());
+      List<WordToken> tempTokens = List.from(currentPageTokens);
+
+      for (final token in paragraphTokens) {
+        tempText.write(token.text);
+        tempTokens.add(token);
+
+        textPainter.text = TextSpan(text: tempText.toString(), style: textStyle);
+        textPainter.layout(maxWidth: screenSize.width - padding.horizontal);
+
+        if (textPainter.height > availableHeight) {
+          pages.add(PageData(
+            text: currentPageText.toString().trim(),
+            tokens: List.from(currentPageTokens),
+          ));
+
+          currentPageText = StringBuffer(token.text);
+          currentPageTokens = [token];
+          break;
+        } else {
+          currentPageText = StringBuffer(tempText.toString());
+          currentPageTokens = List.from(tempTokens);
+        }
+      }
+    }
+
+    if (currentPageText.isNotEmpty) {
+      pages.add(PageData(
+        text: currentPageText.toString().trim(),
+        tokens: List.from(currentPageTokens),
+      ));
+    }
+
+    _sectionPages[sectionIndex] = pages;
+    _paginatedSections.add(sectionIndex);
+
+    // Сохраняем в кеш
+    if (_currentCache != null) {
+      _currentCache!.sections[sectionIndex] = SectionPaginationData(
+        sectionIndex: sectionIndex,
+        pages: pages.map((page) => PageTokenData(
+          text: page.text,
+          tokens: page.tokens.map((token) => TokenData(
+            text: token.text,
+            word: token.word,
+            startOffset: token.startOffset,
+          )).toList(),
+        )).toList(),
+      );
+    }
+
+    if (!background) {
+      onPaginationUpdate?.call();
+    }
+  }
+
+  // Проверка загружена ли секция
+  bool isSectionLoaded(int sectionIndex) {
+    return _paginatedSections.contains(sectionIndex);
+  }
+
+  // Получение страниц секции
+  List<PageData> getSectionPages(int sectionIndex) {
+    return _sectionPages[sectionIndex] ?? [PageData(text: '', tokens: [])];
+  }
+
+  // Сохранение кеша в Hive
+  Future<void> saveCacheToHive() async {
+    if (_currentCache == null) return;
+    final cacheKey = _currentCache!.bookFilePath;
+    await _cacheBox?.put(cacheKey, _currentCache!);
+  }
+
+  // Очистка данных
+  void clear() {
+    _sectionPages.clear();
+    _paginatedSections.clear();
+    _currentCache = null;
+    _isBackgroundPaginationRunning = false;
+  }
+
+  // Закрытие
+  Future<void> dispose() async {
+    await saveCacheToHive();
+    _isBackgroundPaginationRunning = false;
+  }
+}

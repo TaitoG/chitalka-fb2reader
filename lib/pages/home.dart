@@ -1,3 +1,4 @@
+//home.dart
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:file_picker/file_picker.dart';
@@ -40,12 +41,10 @@ class _HomePageState extends State<HomePage> {
       String? path = result.files.single.path;
       if (path == null) return;
 
-      // Читаем и парсим
       File file = File(path);
       String content = await file.readAsString();
       Book book = Fb2Parse.parse(content);
 
-      // Сохраняем метаданные в Hive
       final metadata = BookMetadata(
         title: book.title,
         author: book.author,
@@ -58,7 +57,6 @@ class _HomePageState extends State<HomePage> {
 
       setState(() => _isLoading = false);
 
-      // Переходим к чтению
       Navigator.push(
         context,
         MaterialPageRoute(

@@ -18,6 +18,7 @@ dependencies:
   path_provider: ^2.1.0
   shared_preferences: ^2.1.1
   cupertino_icons: ^1.0.8
+  http: ^1.1.0
 
 dev_dependencies:
   flutter_test:
@@ -29,3 +30,16 @@ dev_dependencies:
 flutter:
 
   uses-material-design: true
+  assets:
+    - assets/dicts/rus-eng/rus-eng.dict
+    - assets/dicts/rus-eng/rus-eng.index
+    - assets/dicts/eng-rus/eng-rus.dict
+    - assets/dicts/eng-rus/eng-rus.index
+    - assets/dicts/rus-ita/rus-ita.dict
+    - assets/dicts/rus-ita/rus-ita.index
+    - assets/dicts/ita-rus/ita-rus.dict
+    - assets/dicts/ita-rus/ita-rus.index
+    - assets/dicts/ita-eng/ita-eng.dict
+    - assets/dicts/ita-eng/ita-eng.index
+    - assets/dicts/eng-ita/eng-ita.dict
+    - assets/dicts/eng-ita/eng-ita.index
