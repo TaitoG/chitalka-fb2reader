@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:chitalka/services/dictionary.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
 import '../models/bookmark.dart';
 import '../services/bookmark_service.dart';
 
@@ -54,6 +56,9 @@ class _TranslationBottomSheetState extends State<TranslationBottomSheet> {
   String? _error;
   String _selectedDictionary = 'rus-eng';
   bool _isBookmarked = false;
+  bool _useOnlineTranslation = false;
+  String? _onlineTranslation;
+  List<String>? _fuzzyMatches;
 
   final Map<String, String> _availableDictionaries = {
     'Русский → English': 'rus-eng',
@@ -62,6 +67,16 @@ class _TranslationBottomSheetState extends State<TranslationBottomSheet> {
     'Русский → Italiano': 'rus-ita',
     'English → Italiano': 'eng-ita',
     'Italiano → English': 'ita-eng',
+  };
+
+  // Language codes for online translation
+  final Map<String, Map<String, String>> _langCodes = {
+    'rus-eng': {'source': 'ru', 'target': 'en'},
+    'eng-rus': {'source': 'en', 'target': 'ru'},
+    'ita-rus': {'source': 'it', 'target': 'ru'},
+    'rus-ita': {'source': 'ru', 'target': 'it'},
+    'eng-ita': {'source': 'en', 'target': 'it'},
+    'ita-eng': {'source': 'it', 'target': 'en'},
   };
 
   @override
@@ -74,6 +89,8 @@ class _TranslationBottomSheetState extends State<TranslationBottomSheet> {
     final prefs = await SharedPreferences.getInstance();
     final lastDict = prefs.getString('lastDictionary') ?? 'rus-eng';
     _selectedDictionary = lastDict;
+    _useOnlineTranslation = prefs.getBool('useOnlineTranslation') ?? false;
+
     await _checkIfBookmarked();
     try {
       await widget.dictionaryService.loadDictionary(_selectedDictionary);
@@ -101,13 +118,16 @@ class _TranslationBottomSheetState extends State<TranslationBottomSheet> {
 
   Future<void> _addBookmark() async {
     try {
+      final translation = _onlineTranslation ??
+          (_entries.isNotEmpty ? _entries.first.definition : null);
+
       await widget.bookmarkService.createBookmark(
         bookId: widget.bookId,
         bookTitle: '',
         type: BookmarkType.word,
         text: widget.word,
-        context: _entries.isNotEmpty ? _entries.first.definition : null,
-        translation: _entries.isNotEmpty ? _entries.first.definition : null,
+        context: translation,
+        translation: translation,
         sectionIndex: 0,
         pageIndex: 0,
       );
@@ -120,39 +140,69 @@ class _TranslationBottomSheetState extends State<TranslationBottomSheet> {
 
       widget.onBookmarkPressed?.call();
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('"${widget.word}" added to bookmarks'),
-          duration: const Duration(seconds: 2),
-        ),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('"${widget.word}" added to bookmarks'),
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Failed to add bookmark: $e'),
-          backgroundColor: Colors.red,
-          duration: const Duration(seconds: 2),
-        ),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to add bookmark: $e'),
+            backgroundColor: Colors.red,
+            duration: const Duration(seconds: 2),
+          ),
+        );
+      }
     }
   }
 
   Future<void> _loadTranslation() async {
+
     setState(() {
       _isLoading = true;
       _error = null;
+      _onlineTranslation = null;
+      _fuzzyMatches = null;
     });
 
     try {
+      if (_useOnlineTranslation) {
+        await _fetchOnlineTranslation();
+
+        if (mounted) {
+          setState(() {
+            _entries = [];
+            _isLoading = false;
+            if (_onlineTranslation == null) {
+              _error = 'Online translation failed';
+            }
+          });
+        }
+        return;
+      }
+
       final entries = await widget.dictionaryService.lookupWord(widget.word);
+
+      if (entries.isEmpty) {
+        await _performFuzzySearch();
+      }
+
       if (mounted) {
         setState(() {
           _entries = entries;
           _isLoading = false;
-          if (entries.isEmpty) _error = 'Translation is not found';
+          if (entries.isEmpty && _fuzzyMatches == null) {
+            _error = 'Translation is not found';
+          }
         });
       }
     } catch (e) {
+      print('❌ Error in _loadTranslation: $e');
       if (mounted) {
         setState(() {
           _isLoading = false;
@@ -160,6 +210,102 @@ class _TranslationBottomSheetState extends State<TranslationBottomSheet> {
         });
       }
     }
+  }
+
+  Future<void> _performFuzzySearch() async {
+    try {
+      // Use the built-in method from DictionaryService
+      final matches = await widget.dictionaryService.getFuzzyMatches(
+        widget.word,
+        limit: 5,
+        threshold: 0.6,
+      );
+
+      if (mounted && matches.isNotEmpty) {
+        setState(() {
+          _fuzzyMatches = matches;
+        });
+      }
+    } catch (e) {
+      print('Fuzzy search error: $e');
+    }
+  }
+
+  Future<void> _fetchOnlineTranslation() async {
+    final langCodes = _langCodes[_selectedDictionary];
+    if (langCodes == null) {
+      print('❌ No language codes for: $_selectedDictionary');
+      return;
+    }
+
+    String? translation;
+
+    translation = await _tryMyMemoryTranslation(langCodes);
+
+    if (translation == null) {
+      print('🌐 MyMemory failed, trying Lingva...');
+      translation = await _tryLingvaTranslation(langCodes);
+    }
+
+    if (mounted && translation != null) {
+      setState(() {
+        _onlineTranslation = translation;
+      });
+    } else {
+      print('❌ No translation obtained or widget not mounted');
+    }
+  }
+
+  Future<String?> _tryMyMemoryTranslation(Map<String, String> langCodes) async {
+    try {
+      final source = langCodes['source']!;
+      final target = langCodes['target']!;
+
+      final url = Uri.parse(
+          'https://api.mymemory.translated.net/get'
+              '?q=${Uri.encodeComponent(widget.word)}'
+              '&langpair=$source|$target'
+      );
+
+      final response = await http.get(url).timeout(
+        const Duration(seconds: 5),
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        if (data['responseStatus'] == 200 || data['responseData'] != null) {
+          final translated = data['responseData']['translatedText'];
+          return translated;
+        }
+      }
+    } catch (e) {
+      print('❌ MyMemory translation error: $e');
+    }
+    return null;
+  }
+
+  Future<String?> _tryLingvaTranslation(Map<String, String> langCodes) async {
+    try {
+      final source = langCodes['source']!;
+      final target = langCodes['target']!;
+
+      final url = Uri.parse(
+          'https://lingva.ml/api/v1/$source/$target/${Uri.encodeComponent(widget.word)}'
+      );
+
+      final response = await http.get(url).timeout(
+        const Duration(seconds: 5),
+      );
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final translated = data['translation'];
+        return translated;
+      }
+    } catch (e) {
+      print('❌ Lingva translation error: $e');
+    }
+    return null;
   }
 
   Future<void> _changeDictionary(String newDict) async {
@@ -173,6 +319,21 @@ class _TranslationBottomSheetState extends State<TranslationBottomSheet> {
 
     await widget.dictionaryService.loadDictionary(newDict);
     await _loadTranslation();
+  }
+
+  Future<void> _toggleOnlineTranslation(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('useOnlineTranslation', value);
+
+    setState(() {
+      _useOnlineTranslation = value;
+    });
+
+    if (value && _entries.isEmpty && _onlineTranslation == null) {
+      setState(() => _isLoading = true);
+      await _fetchOnlineTranslation();
+      setState(() => _isLoading = false);
+    }
   }
 
   @override
@@ -219,8 +380,8 @@ class _TranslationBottomSheetState extends State<TranslationBottomSheet> {
                                 ),
                               ),
                               if (_isBookmarked)
-                                Padding(
-                                  padding: const EdgeInsets.only(left: 8.0),
+                                const Padding(
+                                  padding: EdgeInsets.only(left: 8.0),
                                   child: Icon(
                                     Icons.bookmark,
                                     size: 16,
@@ -242,6 +403,15 @@ class _TranslationBottomSheetState extends State<TranslationBottomSheet> {
                             onChanged: (value) {
                               if (value != null) _changeDictionary(value);
                             },
+                          ),
+                          Row(
+                            children: [
+                              Switch(
+                                value: _useOnlineTranslation,
+                                onChanged: _toggleOnlineTranslation,
+                              ),
+                              const Text('Online translation'),
+                            ],
                           ),
                         ],
                       ),
@@ -283,27 +453,84 @@ class _TranslationBottomSheetState extends State<TranslationBottomSheet> {
       );
     }
 
-    if (_error != null || _entries.isEmpty) {
-      return Center(
-        child: Text(_error ?? 'Translation is not found', style: const TextStyle(fontSize: 16)),
-      );
-    }
-
-    return ListView.builder(
+    return ListView(
       controller: scrollController,
       padding: const EdgeInsets.all(16),
-      itemCount: _entries.length,
-      itemBuilder: (context, index) {
-        final entry = _entries[index];
-        return Card(
-          margin: const EdgeInsets.only(bottom: 16),
-          elevation: 2,
-          child: Padding(
-            padding: const EdgeInsets.all(16),
-            child: Text(entry.definition, style: const TextStyle(fontSize: 16)),
+      children: [
+        if (_entries.isNotEmpty) ...[
+          const Text(
+            'Dictionary',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
           ),
-        );
-      },
+          const SizedBox(height: 8),
+          ..._entries.map((entry) => Card(
+            margin: const EdgeInsets.only(bottom: 16),
+            elevation: 2,
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Text(entry.definition, style: const TextStyle(fontSize: 16)),
+            ),
+          )),
+        ],
+
+        if (_onlineTranslation != null) ...[
+          const Text(
+            'Online Translation',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 8),
+          Card(
+            margin: const EdgeInsets.only(bottom: 16),
+            elevation: 2,
+            color: Colors.blue.shade50,
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(_onlineTranslation!, style: const TextStyle(fontSize: 16)),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Powered by MyMemory/Lingva',
+                    style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+
+        if (_fuzzyMatches != null && _fuzzyMatches!.isNotEmpty) ...[
+          const Text(
+            'Did you mean?',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: _fuzzyMatches!.map((match) => ActionChip(
+              label: Text(match),
+              onPressed: () async {
+                final entries = await widget.dictionaryService.lookupWord(match);
+                if (mounted) {
+                  setState(() {
+                    _entries = entries;
+                    _fuzzyMatches = null;
+                  });
+                }
+              },
+            )).toList(),
+          ),
+          const SizedBox(height: 16),
+        ],
+
+        if (_entries.isEmpty && _onlineTranslation == null && _fuzzyMatches == null)
+          Center(
+            child: Text(_error ?? 'Translation is not found',
+                style: const TextStyle(fontSize: 16)),
+          ),
+      ],
     );
   }
 }

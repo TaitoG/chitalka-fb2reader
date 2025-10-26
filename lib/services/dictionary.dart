@@ -22,6 +22,10 @@ class DictionaryService {
   late ByteData _dictData;
   String _currentDictionary = '';
 
+  // Cache for word list
+  List<String>? _cachedWordList;
+  String? _cachedDictionaryId;
+
   String get currentDictionary => _currentDictionary;
 
   Future<void> loadDictionary(String dictCode) async {
@@ -29,6 +33,10 @@ class DictionaryService {
       _currentDictionary = dictCode;
       _indexCache.clear();
       _dictCache.clear();
+
+      // Clear word list cache when loading new dictionary
+      _cachedWordList = null;
+      _cachedDictionaryId = null;
 
       final indexPath = 'assets/dicts/$dictCode/$dictCode.index';
       final dictPath = 'assets/dicts/$dictCode/$dictCode.dict';
@@ -166,5 +174,101 @@ class DictionaryService {
     }
     return jaro + prefix * 0.1 * (1 - jaro);
   }
-}
 
+  /// Returns all words from the currently loaded dictionary
+  /// Used for fuzzy matching and autocomplete
+  Future<List<String>> getAllWords() async {
+    // Return cached list if dictionary hasn't changed
+    if (_cachedWordList != null && _cachedDictionaryId == _currentDictionary) {
+      return _cachedWordList!;
+    }
+
+    // Make sure dictionary is loaded
+    if (_indexCache.isEmpty) {
+      return [];
+    }
+
+    // Extract all keys (words) from the index cache
+    final words = _indexCache.keys.toList();
+
+    // Cache the result
+    _cachedWordList = words;
+    _cachedDictionaryId = _currentDictionary;
+
+    return words;
+  }
+
+  /// Get words matching a prefix (efficient for autocomplete)
+  Future<List<String>> getWordsWithPrefix(String prefix) async {
+    if (_indexCache.isEmpty) {
+      return [];
+    }
+
+    final lowerPrefix = prefix.toLowerCase();
+    return _indexCache.keys
+        .where((word) => word.startsWith(lowerPrefix))
+        .toList();
+  }
+
+  /// Get fuzzy matches for a word with configurable threshold
+  Future<List<String>> getFuzzyMatches(
+      String searchWord, {
+        int limit = 5,
+        double threshold = 0.6,
+      }) async {
+    final allWords = await getAllWords();
+
+    if (allWords.isEmpty) {
+      return [];
+    }
+
+    final matches = <String, double>{};
+    final search = searchWord.toLowerCase();
+
+    // Calculate similarity for each word
+    for (final word in allWords) {
+      final similarity = _similarity(search, word);
+      if (similarity > threshold) {
+        matches[word] = similarity;
+      }
+    }
+
+    // Sort by similarity descending and return top matches
+    final sortedMatches = matches.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+
+    return sortedMatches
+        .take(limit)
+        .map((e) => e.key)
+        .toList();
+  }
+
+  /// Get multiple fuzzy matches with their similarity scores
+  /// Useful for showing "Did you mean?" suggestions
+  Future<List<MapEntry<String, double>>> getFuzzyMatchesWithScores(
+      String searchWord, {
+        int limit = 5,
+        double threshold = 0.6,
+      }) async {
+    final allWords = await getAllWords();
+
+    if (allWords.isEmpty) {
+      return [];
+    }
+
+    final matches = <String, double>{};
+    final search = searchWord.toLowerCase();
+
+    for (final word in allWords) {
+      final similarity = _similarity(search, word);
+      if (similarity > threshold) {
+        matches[word] = similarity;
+      }
+    }
+
+    final sortedMatches = matches.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+
+    return sortedMatches.take(limit).toList();
+  }
+}

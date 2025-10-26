@@ -83,7 +83,7 @@ class _HomePageState extends State<HomePage> {
         annotation: book.annotation,
         filePath: filePath,
         addedDate: DateTime.now(),
-        coverImage: book.coverImage, // Save cover image
+        coverImage: book.coverImage,
       );
 
       await _booksBox.add(metadata);
