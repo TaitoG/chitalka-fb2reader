@@ -1,12 +1,13 @@
-// pages/reader/reader.dart
-
+// reader.dart
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
 import 'package:chitalka/models/book.dart';
 import 'package:chitalka/models/page_data.dart';
 import 'package:chitalka/services/pagination.dart';
 import 'package:chitalka/services/dictionary.dart';
+import 'package:chitalka/services/bookmark_service.dart';
 import 'package:chitalka/widgets/translation.dart';
+import 'package:chitalka/pages/bookmark_page.dart';
 
 class ReaderPage extends StatefulWidget {
   final Book book;
@@ -31,22 +32,24 @@ class _ReaderPageState extends State<ReaderPage> {
   bool _isInitialized = false;
   String? _selectedWord;
   int? _selectedWordIndex;
+  bool _showAppBar = true;
 
   // Services
   late final PaginationService _paginationService;
   late final DictionaryService _dictionaryService;
+  late final BookmarkService _bookmarkService;
+
+  Set<String> _bookmarkedWords = {};
 
   @override
   void initState() {
     super.initState();
 
-    // Загружаем последнюю позицию
     if (widget.metadata?.lastPosition != null) {
       _currentSectionIndex = widget.metadata!.lastPosition! ~/ 1000;
       _currentPageIndex = widget.metadata!.lastPosition! % 1000;
     }
 
-    // Инициализируем сервисы
     _paginationService = PaginationService();
     _paginationService.onPaginationUpdate = () {
       if (mounted) setState(() {});
@@ -56,12 +59,23 @@ class _ReaderPageState extends State<ReaderPage> {
     };
 
     _dictionaryService = DictionaryService();
+    _bookmarkService = BookmarkService();
 
     _initializeServices();
   }
 
   Future<void> _initializeServices() async {
     await _paginationService.initializeCache();
+    await _bookmarkService.initialize();
+    await _loadBookmarkedWords();
+  }
+
+  Future<void> _loadBookmarkedWords() async {
+    final bookId = widget.metadata?.filePath ?? widget.book.title;
+    final bookmarks = await _bookmarkService.getBookmarksByBook(bookId);
+    setState(() {
+      _bookmarkedWords = bookmarks.map((b) => b.text.toLowerCase()).toSet();
+    });
   }
 
   @override
@@ -102,7 +116,6 @@ class _ReaderPageState extends State<ReaderPage> {
     );
   }
 
-  // Геттеры для текущего состояния
   BookSection get _currentSection => widget.book.sections[_currentSectionIndex];
 
   List<PageData> get _currentPages =>
@@ -117,7 +130,6 @@ class _ReaderPageState extends State<ReaderPage> {
     return _currentPageIndex > 0 || _currentSectionIndex > 0;
   }
 
-  // Навигация
   void _nextPage() {
     setState(() {
       if (_currentPageIndex < _currentPages.length - 1) {
@@ -163,24 +175,23 @@ class _ReaderPageState extends State<ReaderPage> {
     }
   }
 
-  // Обработка тапа по слову
-  void _onWordTap(String word, int index) {
+  void _onWordTap(String word, int index) async {
     setState(() {
       if (_selectedWordIndex == index) {
-        // Если слово уже выделено, снимаем выделение
         _selectedWord = null;
         _selectedWordIndex = null;
       } else {
-        // Выделяем новое слово и показываем перевод
         _selectedWord = word;
         _selectedWordIndex = index;
-        _showTranslation(word);
       }
     });
+
+    if (_selectedWord != null) {
+      _showTranslation(word);
+    }
   }
 
   void _showTranslation(String word) {
-    // Убираем знаки пунктуации и приводим к нижнему регистру
     final cleanWord = word
         .replaceAll(RegExp(r'[^\wа-яА-ЯёЁ]'), '')
         .toLowerCase();
@@ -188,11 +199,16 @@ class _ReaderPageState extends State<ReaderPage> {
     if (cleanWord.isEmpty) return;
 
     TranslationBottomSheet.show(
-      context,
-      cleanWord,
-      _dictionaryService,
+      context: context,
+      word: cleanWord,
+      dictionaryService: _dictionaryService,
+      bookmarkService: _bookmarkService,
+      bookId: widget.metadata?.filePath ?? widget.book.title,
+      onBookmarkPressed: () {
+        _loadBookmarkedWords();
+        setState(() {});
+      },
     ).then((_) {
-      // Снимаем выделение после закрытия bottom sheet
       if (mounted) {
         setState(() {
           _selectedWord = null;
@@ -200,6 +216,32 @@ class _ReaderPageState extends State<ReaderPage> {
         });
       }
     });
+  }
+
+  void _handleTap(TapUpDetails details) {
+    final screenWidth = MediaQuery.of(context).size.width;
+    final tapX = details.globalPosition.dx;
+
+    if (_selectedWordIndex != null) {
+      setState(() {
+        _selectedWord = null;
+        _selectedWordIndex = null;
+      });
+      return;
+    }
+
+    final leftPart = screenWidth * 0.3;
+    final rightPart = screenWidth * 0.7;
+
+    if (tapX < leftPart) {
+      if (_hasPrevPage) _prevPage();
+    } else if (tapX > rightPart) {
+      if (_hasNextPage) _nextPage();
+    } else {
+      setState(() {
+        _showAppBar = !_showAppBar;
+      });
+    }
   }
 
   @override
@@ -219,111 +261,140 @@ class _ReaderPageState extends State<ReaderPage> {
     final currentPage = currentPages[_currentPageIndex];
 
     return Scaffold(
-      appBar: AppBar(
-        title: Text(widget.book.title),
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        actions: [
-          if (_paginationService.isBackgroundPaginationRunning)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8.0),
-              child: Center(
-                child: SizedBox(
-                  width: 16,
-                  height: 16,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    valueColor: AlwaysStoppedAnimation<Color>(
-                      Theme.of(context).colorScheme.onPrimary,
+      body: Stack(
+        children: [
+          GestureDetector(
+            onTapUp: _handleTap,
+            child: Container(
+              color: Colors.white,
+              padding: const EdgeInsets.all(24.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (_currentSection.title.isNotEmpty && _currentPageIndex == 0)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 16.0),
+                      child: Text(
+                        _currentSection.title,
+                        style: TextStyle(
+                          fontSize: _fontSize + 4,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+
+                  Expanded(
+                    child: SingleChildScrollView(
+                      physics: const NeverScrollableScrollPhysics(),
+                      child: RichText(
+                        textAlign: TextAlign.justify,
+                        text: TextSpan(
+                          style: TextStyle(
+                            fontSize: _fontSize,
+                            height: _lineHeight,
+                            color: Colors.black,
+                          ),
+                          children: currentPage.tokens.asMap().entries.map((entry) {
+                            final index = entry.key;
+                            final token = entry.value;
+                            final isSelected = _selectedWordIndex == index;
+                            final isBookmarked = _bookmarkedWords.contains(
+                              token.word.toLowerCase(),
+                            );
+
+                            return TextSpan(
+                              text: token.text,
+                              style: TextStyle(
+                                backgroundColor: isSelected
+                                    ? Colors.yellow.withOpacity(0.5)
+                                    : isBookmarked
+                                    ? Colors.blue.withOpacity(0.1)
+                                    : null,
+                                decoration: isBookmarked
+                                    ? TextDecoration.underline
+                                    : null,
+                                decorationColor: Colors.blue.withOpacity(0.5),
+                                decorationStyle: TextDecorationStyle.dotted,
+                              ),
+                              recognizer: TapGestureRecognizer()
+                                ..onTap = () => _onWordTap(token.word, index),
+                            );
+                          }).toList(),
+                        ),
+                      ),
                     ),
                   ),
+                  Padding(
+                    padding: const EdgeInsets.only(top: 16.0),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          'Section ${_currentSectionIndex + 1}/${widget.book.sections.length}',
+                          style: const TextStyle(color: Colors.grey, fontSize: 12),
+                        ),
+                        Text(
+                          'Page ${_currentPageIndex + 1}/${currentPages.length}',
+                          style: const TextStyle(color: Colors.grey, fontSize: 12),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+          if (_showAppBar)
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: Container(
+                height: kToolbarHeight + MediaQuery.of(context).padding.top,
+                color: Theme.of(context).colorScheme.inversePrimary,
+                child: AppBar(
+                  title: Text(widget.book.title),
+                  backgroundColor: Colors.transparent,
+                  elevation: 0,
+                  actions: [
+                    IconButton(
+                      icon: const Icon(Icons.bookmarks),
+                      tooltip: 'View bookmarks',
+                      onPressed: () async {
+                        await Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => BookmarksPage(
+                              bookmarkService: _bookmarkService,
+                            ),
+                          ),
+                        );
+                        await _loadBookmarkedWords();
+                        setState(() {});
+                      },
+                    ),
+                    if (_paginationService.isBackgroundPaginationRunning)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 8.0),
+                        child: Center(
+                          child: SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              valueColor: AlwaysStoppedAnimation<Color>(
+                                Theme.of(context).colorScheme.onPrimary,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                  ],
                 ),
               ),
             ),
         ],
-      ),
-      body: GestureDetector(
-        onTapUp: (details) {
-          if (_selectedWordIndex == null) {
-            final screenWidth = MediaQuery.of(context).size.width;
-            if (details.globalPosition.dx < screenWidth / 2) {
-              if (_hasPrevPage) _prevPage();
-            } else {
-              if (_hasNextPage) _nextPage();
-            }
-          }
-        },
-        child: Container(
-          color: Colors.white,
-          padding: const EdgeInsets.all(24.0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Заголовок секции
-              if (_currentSection.title.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 16.0),
-                  child: Text(
-                    _currentSection.title,
-                    style: TextStyle(
-                      fontSize: _fontSize + 4,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ),
-
-              // Текст с токенами
-              Expanded(
-                child: SingleChildScrollView(
-                  physics: const NeverScrollableScrollPhysics(),
-                  child: RichText(
-                    textAlign: TextAlign.justify,
-                    text: TextSpan(
-                      style: TextStyle(
-                        fontSize: _fontSize,
-                        height: _lineHeight,
-                        color: Colors.black,
-                      ),
-                      children: currentPage.tokens.asMap().entries.map((entry) {
-                        final index = entry.key;
-                        final token = entry.value;
-                        final isSelected = _selectedWordIndex == index;
-
-                        return TextSpan(
-                          text: token.text,
-                          style: TextStyle(
-                            backgroundColor: isSelected
-                                ? Colors.yellow.withOpacity(0.5)
-                                : null,
-                          ),
-                          recognizer: TapGestureRecognizer()
-                            ..onTap = () => _onWordTap(token.word, index),
-                        );
-                      }).toList(),
-                    ),
-                  ),
-                ),
-              ),
-
-              // Футер с номерами страниц
-              Padding(
-                padding: const EdgeInsets.only(top: 16.0),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      'Раздел ${_currentSectionIndex + 1}/${widget.book.sections.length}',
-                      style: const TextStyle(color: Colors.grey, fontSize: 12),
-                    ),
-                    Text(
-                      'Страница ${_currentPageIndex + 1}/${currentPages.length}',
-                      style: const TextStyle(color: Colors.grey, fontSize: 12),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-        ),
       ),
     );
   }

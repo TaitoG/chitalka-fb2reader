@@ -1,3 +1,4 @@
+// book.dart
 import 'package:hive/hive.dart';
 
 part 'book.g.dart';
@@ -22,6 +23,9 @@ class BookMetadata extends HiveObject {
   @HiveField(5)
   DateTime addedDate;
 
+  @HiveField(6)
+  String? coverImage;
+
   BookMetadata({
     required this.title,
     required this.author,
@@ -29,6 +33,7 @@ class BookMetadata extends HiveObject {
     required this.filePath,
     this.lastPosition,
     required this.addedDate,
+    this.coverImage,
   });
 }
 

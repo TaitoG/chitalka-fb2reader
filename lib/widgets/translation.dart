@@ -1,23 +1,33 @@
-//translation.dart
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:chitalka/services/dictionary.dart';
+import '../models/bookmark.dart';
+import '../services/bookmark_service.dart';
 
 class TranslationBottomSheet extends StatefulWidget {
   final String word;
   final DictionaryService dictionaryService;
+  final BookmarkService bookmarkService;
+  final String bookId;
+  final VoidCallback? onBookmarkPressed;
 
   const TranslationBottomSheet({
     Key? key,
     required this.word,
     required this.dictionaryService,
+    required this.bookmarkService,
+    required this.bookId,
+    required this.onBookmarkPressed,
   }) : super(key: key);
 
-  static Future<void> show(
-      BuildContext context,
-      String word,
-      DictionaryService dictionaryService,
-      ) {
+  static Future<void> show({
+    required BuildContext context,
+    required String word,
+    required DictionaryService dictionaryService,
+    required BookmarkService bookmarkService,
+    required String bookId,
+    VoidCallback? onBookmarkPressed,
+  }) {
     return showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -27,6 +37,9 @@ class TranslationBottomSheet extends StatefulWidget {
       builder: (context) => TranslationBottomSheet(
         word: word,
         dictionaryService: dictionaryService,
+        bookmarkService: bookmarkService,
+        bookId: bookId,
+        onBookmarkPressed: onBookmarkPressed,
       ),
     );
   }
@@ -40,14 +53,15 @@ class _TranslationBottomSheetState extends State<TranslationBottomSheet> {
   List<DictionaryEntry> _entries = [];
   String? _error;
   String _selectedDictionary = 'rus-eng';
+  bool _isBookmarked = false;
 
   final Map<String, String> _availableDictionaries = {
-    'Русский → Английский': 'rus-eng',
-    'Английский → Русский': 'eng-rus',
-    'Итальянский → Русский': 'ita-rus',
-    'Русский → Итальянский': 'rus-ita',
-    'Английский → Итальянский': 'eng-ita',
-    'Итальянский → Английский': 'ita-eng',
+    'Русский → English': 'rus-eng',
+    'English → Русский': 'eng-rus',
+    'Italiano → Русский': 'ita-rus',
+    'Русский → Italiano': 'rus-ita',
+    'English → Italiano': 'eng-ita',
+    'Italiano → English': 'ita-eng',
   };
 
   @override
@@ -60,15 +74,66 @@ class _TranslationBottomSheetState extends State<TranslationBottomSheet> {
     final prefs = await SharedPreferences.getInstance();
     final lastDict = prefs.getString('lastDictionary') ?? 'rus-eng';
     _selectedDictionary = lastDict;
-
+    await _checkIfBookmarked();
     try {
       await widget.dictionaryService.loadDictionary(_selectedDictionary);
       await _loadTranslation();
     } catch (e) {
       setState(() {
         _isLoading = false;
-        _error = 'Ошибка загрузки словаря: $e';
+        _error = 'Error loading dictionary: $e';
       });
+    }
+  }
+
+  Future<void> _checkIfBookmarked() async {
+    final existing = await widget.bookmarkService.findBookmark(
+      widget.bookId,
+      widget.word.toLowerCase(),
+    );
+
+    if (mounted) {
+      setState(() {
+        _isBookmarked = existing != null;
+      });
+    }
+  }
+
+  Future<void> _addBookmark() async {
+    try {
+      await widget.bookmarkService.createBookmark(
+        bookId: widget.bookId,
+        bookTitle: '',
+        type: BookmarkType.word,
+        text: widget.word,
+        context: _entries.isNotEmpty ? _entries.first.definition : null,
+        translation: _entries.isNotEmpty ? _entries.first.definition : null,
+        sectionIndex: 0,
+        pageIndex: 0,
+      );
+
+      if (mounted) {
+        setState(() {
+          _isBookmarked = true;
+        });
+      }
+
+      widget.onBookmarkPressed?.call();
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('"${widget.word}" added to bookmarks'),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to add bookmark: $e'),
+          backgroundColor: Colors.red,
+          duration: const Duration(seconds: 2),
+        ),
+      );
     }
   }
 
@@ -84,14 +149,14 @@ class _TranslationBottomSheetState extends State<TranslationBottomSheet> {
         setState(() {
           _entries = entries;
           _isLoading = false;
-          if (entries.isEmpty) _error = 'Перевод не найден';
+          if (entries.isEmpty) _error = 'Translation is not found';
         });
       }
     } catch (e) {
       if (mounted) {
         setState(() {
           _isLoading = false;
-          _error = 'Ошибка: $e';
+          _error = 'Error: $e';
         });
       }
     }
@@ -143,12 +208,26 @@ class _TranslationBottomSheetState extends State<TranslationBottomSheet> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(
-                            widget.word,
-                            style: const TextStyle(
-                              fontSize: 24,
-                              fontWeight: FontWeight.bold,
-                            ),
+                          Row(
+                            children: [
+                              Text(
+                                widget.word,
+                                textAlign: TextAlign.left,
+                                style: const TextStyle(
+                                  fontSize: 24,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              if (_isBookmarked)
+                                Padding(
+                                  padding: const EdgeInsets.only(left: 8.0),
+                                  child: Icon(
+                                    Icons.bookmark,
+                                    size: 16,
+                                    color: Colors.blue,
+                                  ),
+                                ),
+                            ],
                           ),
                           const SizedBox(height: 8),
                           DropdownButton<String>(
@@ -171,6 +250,13 @@ class _TranslationBottomSheetState extends State<TranslationBottomSheet> {
                       icon: const Icon(Icons.close),
                       onPressed: () => Navigator.pop(context),
                     ),
+                    IconButton(
+                      icon: Icon(
+                        _isBookmarked ? Icons.bookmark : Icons.bookmark_add_outlined,
+                        color: _isBookmarked ? Colors.blue : null,
+                      ),
+                      onPressed: _addBookmark,
+                    )
                   ],
                 ),
               ),
@@ -191,7 +277,7 @@ class _TranslationBottomSheetState extends State<TranslationBottomSheet> {
           children: [
             CircularProgressIndicator(),
             SizedBox(height: 16),
-            Text('Загрузка перевода...'),
+            Text('Loading...'),
           ],
         ),
       );
@@ -199,7 +285,7 @@ class _TranslationBottomSheetState extends State<TranslationBottomSheet> {
 
     if (_error != null || _entries.isEmpty) {
       return Center(
-        child: Text(_error ?? 'Перевод не найден', style: const TextStyle(fontSize: 16)),
+        child: Text(_error ?? 'Translation is not found', style: const TextStyle(fontSize: 16)),
       );
     }
 

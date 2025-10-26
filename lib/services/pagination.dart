@@ -1,5 +1,4 @@
-// services/pagination/pagination_service.dart
-
+// services/pagination.dart
 import 'package:flutter/material.dart';
 import 'package:hive/hive.dart';
 import 'package:chitalka/models/book.dart';
@@ -15,21 +14,17 @@ class PaginationService {
   final Set<int> _paginatedSections = {};
   bool _isBackgroundPaginationRunning = false;
 
-  // Callbacks для уведомления UI
   VoidCallback? onPaginationUpdate;
   VoidCallback? onBackgroundPaginationComplete;
 
-  // Геттеры
   bool get isBackgroundPaginationRunning => _isBackgroundPaginationRunning;
   Map<int, List<PageData>> get sectionPages => _sectionPages;
   PaginationCache? get currentCache => _currentCache;
 
-  // Инициализация кеша
   Future<void> initializeCache() async {
     _cacheBox = await Hive.openBox<PaginationCache>('pagination_cache');
   }
 
-  // Загрузка или создание пагинации
   Future<void> loadOrCreatePagination({
     required Book book,
     required String? cacheKey,
@@ -44,11 +39,9 @@ class PaginationService {
 
     if (_currentCache != null &&
         _currentCache!.isValid(fontSize, lineHeight, screenSize.width, screenSize.height)) {
-      // Загружаем из кеша
       await loadSectionFromCache(currentSectionIndex);
       preloadNearbySections(currentSectionIndex, book.sections.length);
     } else {
-      // Создаём новый кеш
       _currentCache = PaginationCache(
         bookFilePath: cacheKey,
         fontSize: fontSize,
@@ -75,8 +68,6 @@ class PaginationService {
       );
     }
   }
-
-  // Загрузка секции из кеша
   Future<void> loadSectionFromCache(int sectionIndex) async {
     if (_currentCache?.sections.containsKey(sectionIndex) ?? false) {
       final cachedSection = _currentCache!.sections[sectionIndex]!;
@@ -98,7 +89,6 @@ class PaginationService {
     }
   }
 
-  // Предзагрузка соседних секций
   void preloadNearbySections(int currentSectionIndex, int totalSections) {
     final sectionsToLoad = <int>[];
 
@@ -116,7 +106,6 @@ class PaginationService {
     }
   }
 
-  // Запуск фоновой пагинации
   void startBackgroundPagination({
     required Book book,
     required double fontSize,
@@ -136,7 +125,6 @@ class PaginationService {
     });
   }
 
-  // Пагинация следующей секции
   Future<void> _paginateNextSection({
     required Book book,
     required double fontSize,
@@ -178,7 +166,6 @@ class PaginationService {
     }
   }
 
-  // Основная функция пагинации секции
   Future<void> paginateSection({
     required Book book,
     required int sectionIndex,
@@ -260,7 +247,6 @@ class PaginationService {
     _sectionPages[sectionIndex] = pages;
     _paginatedSections.add(sectionIndex);
 
-    // Сохраняем в кеш
     if (_currentCache != null) {
       _currentCache!.sections[sectionIndex] = SectionPaginationData(
         sectionIndex: sectionIndex,
@@ -280,24 +266,20 @@ class PaginationService {
     }
   }
 
-  // Проверка загружена ли секция
   bool isSectionLoaded(int sectionIndex) {
     return _paginatedSections.contains(sectionIndex);
   }
 
-  // Получение страниц секции
   List<PageData> getSectionPages(int sectionIndex) {
     return _sectionPages[sectionIndex] ?? [PageData(text: '', tokens: [])];
   }
 
-  // Сохранение кеша в Hive
   Future<void> saveCacheToHive() async {
     if (_currentCache == null) return;
     final cacheKey = _currentCache!.bookFilePath;
     await _cacheBox?.put(cacheKey, _currentCache!);
   }
 
-  // Очистка данных
   void clear() {
     _sectionPages.clear();
     _paginatedSections.clear();
@@ -305,7 +287,6 @@ class PaginationService {
     _isBackgroundPaginationRunning = false;
   }
 
-  // Закрытие
   Future<void> dispose() async {
     await saveCacheToHive();
     _isBackgroundPaginationRunning = false;

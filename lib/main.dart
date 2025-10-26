@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'models/book.dart';
 import 'models/pagination_cache.dart';
+import 'models/bookmark.dart';
 import 'pages/home.dart';
+import 'widgets/bar.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -14,6 +16,8 @@ void main() async {
   Hive.registerAdapter(SectionPaginationDataAdapter());
   Hive.registerAdapter(PageTokenDataAdapter());
   Hive.registerAdapter(TokenDataAdapter());
+  Hive.registerAdapter(BookmarkAdapter());
+  Hive.registerAdapter(BookmarkTypeAdapter());
 
   runApp(const MyApp());
 }
@@ -26,7 +30,7 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       title: 'Chitalka',
       theme: ThemeData(primarySwatch: Colors.blue),
-      home: const HomePage(),
+      home: const MainNavigationPage(),
     );
   }
 }

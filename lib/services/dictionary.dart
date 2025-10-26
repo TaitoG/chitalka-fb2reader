@@ -80,7 +80,6 @@ class DictionaryService {
     if (_indexCache.containsKey(cleanWord)) {
       bestMatch = MapEntry(cleanWord, _indexCache[cleanWord]);
     } else {
-      // Фаззи-поиск (Jaro–Winkler)
       final best = _indexCache.entries
           .map((e) => MapEntry(e.key, _similarity(e.key, cleanWord)))
           .sorted((a, b) => b.value.compareTo(a.value))
