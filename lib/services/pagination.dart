@@ -198,7 +198,7 @@ class PaginationService {
     List<WordToken> currentPageTokens = [];
 
     for (final paragraph in paragraphs) {
-      final paragraphTokens = TextTokenizer.tokenize(paragraph + '\n\n');
+      final paragraphTokens = TextTokenizer.tokenize(paragraph + '\n\u00A0\u00A0\u00A0');
       final paragraphText = paragraphTokens.map((t) => t.text).join();
 
       final tentativeText = currentPageText.toString() + paragraphText;
@@ -211,28 +211,43 @@ class PaginationService {
         continue;
       }
 
-      StringBuffer tempText = StringBuffer(currentPageText.toString());
-      List<WordToken> tempTokens = List.from(currentPageTokens);
+      int tokenIndex = 0;
+      while (tokenIndex < paragraphTokens.length) {
+        final token = paragraphTokens[tokenIndex];
 
-      for (final token in paragraphTokens) {
-        tempText.write(token.text);
-        tempTokens.add(token);
+        StringBuffer testText = StringBuffer(currentPageText.toString());
+        testText.write(token.text);
 
-        textPainter.text = TextSpan(text: tempText.toString(), style: textStyle);
+        textPainter.text = TextSpan(text: testText.toString(), style: textStyle);
         textPainter.layout(maxWidth: screenSize.width - padding.horizontal);
 
-        if (textPainter.height > availableHeight) {
-          pages.add(PageData(
-            text: currentPageText.toString().trim(),
-            tokens: List.from(currentPageTokens),
-          ));
+        if (textPainter.height <= availableHeight) {
+          currentPageText.write(token.text);
+          currentPageTokens.add(token);
+          tokenIndex++;
+        } else {
+          if (currentPageText.isNotEmpty) {
+            pages.add(PageData(
+              text: currentPageText.toString().trim(),
+              tokens: List.from(currentPageTokens),
+            ));
+          }
 
           currentPageText = StringBuffer(token.text);
           currentPageTokens = [token];
-          break;
-        } else {
-          currentPageText = StringBuffer(tempText.toString());
-          currentPageTokens = List.from(tempTokens);
+          tokenIndex++;
+
+          textPainter.text = TextSpan(text: token.text, style: textStyle);
+          textPainter.layout(maxWidth: screenSize.width - padding.horizontal);
+
+          if (textPainter.height > availableHeight) {
+            pages.add(PageData(
+              text: currentPageText.toString(),
+              tokens: List.from(currentPageTokens),
+            ));
+            currentPageText.clear();
+            currentPageTokens.clear();
+          }
         }
       }
     }

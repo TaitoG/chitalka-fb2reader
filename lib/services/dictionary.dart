@@ -22,7 +22,6 @@ class DictionaryService {
   late ByteData _dictData;
   String _currentDictionary = '';
 
-  // Cache for word list
   List<String>? _cachedWordList;
   String? _cachedDictionaryId;
 
@@ -34,7 +33,6 @@ class DictionaryService {
       _indexCache.clear();
       _dictCache.clear();
 
-      // Clear word list cache when loading new dictionary
       _cachedWordList = null;
       _cachedDictionaryId = null;
 
@@ -175,30 +173,23 @@ class DictionaryService {
     return jaro + prefix * 0.1 * (1 - jaro);
   }
 
-  /// Returns all words from the currently loaded dictionary
-  /// Used for fuzzy matching and autocomplete
   Future<List<String>> getAllWords() async {
-    // Return cached list if dictionary hasn't changed
     if (_cachedWordList != null && _cachedDictionaryId == _currentDictionary) {
       return _cachedWordList!;
     }
 
-    // Make sure dictionary is loaded
     if (_indexCache.isEmpty) {
       return [];
     }
 
-    // Extract all keys (words) from the index cache
     final words = _indexCache.keys.toList();
 
-    // Cache the result
     _cachedWordList = words;
     _cachedDictionaryId = _currentDictionary;
 
     return words;
   }
 
-  /// Get words matching a prefix (efficient for autocomplete)
   Future<List<String>> getWordsWithPrefix(String prefix) async {
     if (_indexCache.isEmpty) {
       return [];
@@ -210,7 +201,6 @@ class DictionaryService {
         .toList();
   }
 
-  /// Get fuzzy matches for a word with configurable threshold
   Future<List<String>> getFuzzyMatches(
       String searchWord, {
         int limit = 5,
@@ -225,7 +215,6 @@ class DictionaryService {
     final matches = <String, double>{};
     final search = searchWord.toLowerCase();
 
-    // Calculate similarity for each word
     for (final word in allWords) {
       final similarity = _similarity(search, word);
       if (similarity > threshold) {
@@ -233,7 +222,6 @@ class DictionaryService {
       }
     }
 
-    // Sort by similarity descending and return top matches
     final sortedMatches = matches.entries.toList()
       ..sort((a, b) => b.value.compareTo(a.value));
 
@@ -243,8 +231,6 @@ class DictionaryService {
         .toList();
   }
 
-  /// Get multiple fuzzy matches with their similarity scores
-  /// Useful for showing "Did you mean?" suggestions
   Future<List<MapEntry<String, double>>> getFuzzyMatchesWithScores(
       String searchWord, {
         int limit = 5,

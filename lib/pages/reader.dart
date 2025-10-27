@@ -28,7 +28,7 @@ class _ReaderPageState extends State<ReaderPage> {
   int _currentSectionIndex = 0;
   int _currentPageIndex = 0;
   double _fontSize = 18.0;
-  double _lineHeight = 1.6;
+  double _lineHeight = 1.4;
   bool _isInitialized = false;
   String? _selectedWord;
   int? _selectedWordIndex;
@@ -271,7 +271,7 @@ class _ReaderPageState extends State<ReaderPage> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  if (_currentSection.title.isNotEmpty && _currentPageIndex == 0)
+                  /*if (_currentSection.title.isNotEmpty && _currentPageIndex == 0)
                     Padding(
                       padding: const EdgeInsets.only(bottom: 16.0),
                       child: Text(
@@ -281,7 +281,7 @@ class _ReaderPageState extends State<ReaderPage> {
                           fontWeight: FontWeight.bold,
                         ),
                       ),
-                    ),
+                    ),*/
 
                   Expanded(
                     child: SingleChildScrollView(
