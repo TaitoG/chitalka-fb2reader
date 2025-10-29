@@ -1,3 +1,4 @@
+// fb2.dart
 import 'package:xml/xml.dart';
 import 'package:chitalka/models/book.dart';
 
@@ -7,26 +8,40 @@ class Fb2Parse {
     final fiction = document.findAllElements('FictionBook').first;
     final description = fiction.findElements('description').first;
     final titleInfo = description.findElements('title-info').first;
+
     final title = titleInfo.findElements('book-title').first.innerText;
+
     final author = titleInfo.findElements('author').map((author) {
       final fName = author.findElements('first-name').firstOrNull?.innerText ?? '';
       final lName = author.findElements('last-name').firstOrNull?.innerText ?? '';
       final mName = author.findElements('middle-name').firstOrNull?.innerText ?? '';
       return '$fName ${mName.isNotEmpty ? '$mName ' : ''}$lName'.trim();
     }).toList();
+
     final annotation = titleInfo.findElements('annotation').firstOrNull?.innerText ?? '';
-    final cover = titleInfo.findElements('coverpage').firstOrNull
-      ?.findElements('image').firstOrNull
-      ?.getAttribute('l:href');
+
+    final coverImageId = titleInfo.findElements('coverpage').firstOrNull
+        ?.findElements('image').firstOrNull
+        ?.getAttribute('l:href')
+        ?.replaceFirst('#', '');
+
+    final binaries = extractBinaries(fb2Content);
+
+    String? coverImageData;
+    if (coverImageId != null && binaries.containsKey(coverImageId)) {
+      coverImageData = binaries[coverImageId];
+    }
+
     final body = fiction.findElements('body').first;
     final sections = _parseSections(body);
+
     return Book(
-      title: title,
-      author: author,
-      annotation: annotation,
-      coverImage: cover?.replaceFirst('#', ''),
-      sections: sections,
-      content: fb2Content
+        title: title,
+        author: author,
+        annotation: annotation,
+        coverImage: coverImageData,
+        sections: sections,
+        content: fb2Content
     );
   }
 
@@ -41,26 +56,28 @@ class Fb2Parse {
           continue;
         }
         sections.add(BookSection(
-          title: title,
-          paragraphs: paragraphs,
-          subsections: subsections
+            title: title,
+            paragraphs: paragraphs,
+            subsections: subsections
         ));
       }
     }
     return sections;
   }
+
   static Map<String, String> extractBinaries(String fb2Content) {
     final doc = XmlDocument.parse(fb2Content);
     final bins = <String, String>{};
+
     for (final bin in doc.findAllElements('binary')) {
       final id = bin.getAttribute('id');
-      final type = bin.getAttribute('content-type');
       final data = bin.innerText.trim();
 
-      if (id != null) {
+      if (id != null && data.isNotEmpty) {
         bins[id] = data;
       }
     }
+
     return bins;
   }
 }

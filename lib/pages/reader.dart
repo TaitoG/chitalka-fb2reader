@@ -1,4 +1,5 @@
 // reader.dart
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/gestures.dart';
 import 'package:chitalka/models/book.dart';
@@ -27,9 +28,10 @@ class _ReaderPageState extends State<ReaderPage> {
   // UI State
   int _currentSectionIndex = 0;
   int _currentPageIndex = 0;
-  double _fontSize = 18.0;
-  double _lineHeight = 1.4;
+  static const double _fontSize = 18.0;
+  static const double _lineHeight = 1.4;
   bool _isInitialized = false;
+  bool _servicesInitialized = false;
   String? _selectedWord;
   int? _selectedWordIndex;
   bool _showAppBar = true;
@@ -41,6 +43,13 @@ class _ReaderPageState extends State<ReaderPage> {
 
   Set<String> _bookmarkedWords = {};
 
+  List<InlineSpan>? _cachedTextSpans;
+  int? _cachedPageHash;
+
+  final GlobalKey _textContainerKey = GlobalKey();
+
+  Timer? _updateTimer;
+
   @override
   void initState() {
     super.initState();
@@ -51,44 +60,98 @@ class _ReaderPageState extends State<ReaderPage> {
     }
 
     _paginationService = PaginationService();
-    _paginationService.onPaginationUpdate = () {
-      if (mounted) setState(() {});
-    };
-    _paginationService.onBackgroundPaginationComplete = () {
-      if (mounted) setState(() {});
-    };
+    _paginationService.onPaginationUpdate = _handlePaginationUpdate;
+    _paginationService.onBackgroundPaginationComplete = _handleBackgroundComplete;
 
     _dictionaryService = DictionaryService();
     _bookmarkService = BookmarkService();
 
-    _initializeServices();
+  }
+
+  void _handlePaginationUpdate() {
+    _updateTimer?.cancel();
+    _updateTimer = Timer(const Duration(milliseconds: 150), () {
+      if (mounted) {
+        setState(() {
+          _invalidateCache();
+        });
+      }
+    });
+  }
+
+  void _handleBackgroundComplete() {
+    if (mounted) setState(() {});
   }
 
   Future<void> _initializeServices() async {
+    if (_servicesInitialized) {
+      print('⚠️ Services already initialized, skipping...');
+      return;
+    }
+
+    print('🔧 Initializing services...');
+
     await _paginationService.initializeCache();
-    await _bookmarkService.initialize();
+    print('✅ Pagination service initialized');
+
     await _loadBookmarkedWords();
+    print('✅ Bookmarks loaded');
+
+    _servicesInitialized = true;
   }
 
   Future<void> _loadBookmarkedWords() async {
     final bookId = widget.metadata?.filePath ?? widget.book.title;
     final bookmarks = await _bookmarkService.getBookmarksByBook(bookId);
-    setState(() {
-      _bookmarkedWords = bookmarks.map((b) => b.text.toLowerCase()).toSet();
-    });
+    if (mounted) {
+      setState(() {
+        _bookmarkedWords = bookmarks.map((b) => b.text.toLowerCase()).toSet();
+        _invalidateCache();
+      });
+    }
+  }
+
+  void _invalidateCache() {
+    _cachedTextSpans = null;
+    _cachedPageHash = null;
   }
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
     if (!_isInitialized) {
-      _loadOrCreatePagination();
+      _initializeAndLoadPagination();
       _isInitialized = true;
+    }
+  }
+
+  Future<void> _initializeAndLoadPagination() async {
+    await _initializeServices();
+
+    await _loadOrCreatePagination();
+  }
+
+  Future<void> _waitAndLoadPagination() async {
+    while (_paginationService.currentCache == null &&
+        !await _isPaginationServiceReady()) {
+      await Future.delayed(const Duration(milliseconds: 50));
+    }
+
+    _loadOrCreatePagination();
+  }
+
+  Future<bool> _isPaginationServiceReady() async {
+    try {
+      await _paginationService.initializeCache();
+      return true;
+    } catch (e) {
+      return false;
     }
   }
 
   @override
   void dispose() {
+    _updateTimer?.cancel();
     _savePosition();
     _paginationService.dispose();
     super.dispose();
@@ -102,9 +165,29 @@ class _ReaderPageState extends State<ReaderPage> {
     }
   }
 
+  double _getTextContainerHeight() {
+    final renderBox = _textContainerKey.currentContext?.findRenderObject() as RenderBox?;
+    if (renderBox != null) {
+      return renderBox.size.height;
+    }
+
+    final mediaQuery = MediaQuery.of(context);
+    final topPadding = mediaQuery.padding.top;
+    const additionalTopPadding = 16.0;
+    const bottomInfoHeight = 16.0 + 20.0;
+
+    return mediaQuery.size.height -
+        topPadding -
+        24.0 -
+        additionalTopPadding -
+        48.0 -
+        bottomInfoHeight;
+  }
+
   Future<void> _loadOrCreatePagination() async {
     final size = MediaQuery.of(context).size;
     final cacheKey = widget.metadata?.filePath;
+    final textHeight = _getTextContainerHeight();
 
     await _paginationService.loadOrCreatePagination(
       book: widget.book,
@@ -112,6 +195,7 @@ class _ReaderPageState extends State<ReaderPage> {
       fontSize: _fontSize,
       lineHeight: _lineHeight,
       screenSize: size,
+      textContainerHeight: textHeight,
       currentSectionIndex: _currentSectionIndex,
     );
   }
@@ -131,42 +215,44 @@ class _ReaderPageState extends State<ReaderPage> {
   }
 
   void _nextPage() {
-    setState(() {
-      if (_currentPageIndex < _currentPages.length - 1) {
-        _currentPageIndex++;
-      } else if (_currentSectionIndex < widget.book.sections.length - 1) {
-        _currentSectionIndex++;
-        _currentPageIndex = 0;
-        _ensureSectionLoaded(_currentSectionIndex);
-        _paginationService.preloadNearbySections(
-          _currentSectionIndex,
-          widget.book.sections.length,
-        );
-      }
-      _selectedWord = null;
-      _selectedWordIndex = null;
-      _savePosition();
-    });
+    if (_currentPageIndex < _currentPages.length - 1) {
+      _currentPageIndex++;
+    } else if (_currentSectionIndex < widget.book.sections.length - 1) {
+      _currentSectionIndex++;
+      _currentPageIndex = 0;
+      _ensureSectionLoaded(_currentSectionIndex);
+      _paginationService.preloadNearbySections(
+        _currentSectionIndex,
+        widget.book.sections.length,
+      );
+    }
+
+    _selectedWord = null;
+    _selectedWordIndex = null;
+    _invalidateCache();
+    _savePosition();
+    setState(() {});
   }
 
   void _prevPage() {
-    setState(() {
-      if (_currentPageIndex > 0) {
-        _currentPageIndex--;
-      } else if (_currentSectionIndex > 0) {
-        _currentSectionIndex--;
-        _ensureSectionLoaded(_currentSectionIndex);
-        final pages = _currentPages;
-        _currentPageIndex = pages.isEmpty ? 0 : pages.length - 1;
-        _paginationService.preloadNearbySections(
-          _currentSectionIndex,
-          widget.book.sections.length,
-        );
-      }
-      _selectedWord = null;
-      _selectedWordIndex = null;
-      _savePosition();
-    });
+    if (_currentPageIndex > 0) {
+      _currentPageIndex--;
+    } else if (_currentSectionIndex > 0) {
+      _currentSectionIndex--;
+      _ensureSectionLoaded(_currentSectionIndex);
+      final pages = _currentPages;
+      _currentPageIndex = pages.isEmpty ? 0 : pages.length - 1;
+      _paginationService.preloadNearbySections(
+        _currentSectionIndex,
+        widget.book.sections.length,
+      );
+    }
+
+    _selectedWord = null;
+    _selectedWordIndex = null;
+    _invalidateCache();
+    _savePosition();
+    setState(() {});
   }
 
   void _ensureSectionLoaded(int sectionIndex) {
@@ -175,18 +261,19 @@ class _ReaderPageState extends State<ReaderPage> {
     }
   }
 
-  void _onWordTap(String word, int index) async {
-    setState(() {
-      if (_selectedWordIndex == index) {
+  void _onWordTap(String word, int index) {
+    if (_selectedWordIndex == index) {
+      setState(() {
         _selectedWord = null;
         _selectedWordIndex = null;
-      } else {
+        _invalidateCache();
+      });
+    } else {
+      setState(() {
         _selectedWord = word;
         _selectedWordIndex = index;
-      }
-    });
-
-    if (_selectedWord != null) {
+        _invalidateCache();
+      });
       _showTranslation(word);
     }
   }
@@ -206,13 +293,13 @@ class _ReaderPageState extends State<ReaderPage> {
       bookId: widget.metadata?.filePath ?? widget.book.title,
       onBookmarkPressed: () {
         _loadBookmarkedWords();
-        setState(() {});
       },
     ).then((_) {
       if (mounted) {
         setState(() {
           _selectedWord = null;
           _selectedWordIndex = null;
+          _invalidateCache();
         });
       }
     });
@@ -226,16 +313,17 @@ class _ReaderPageState extends State<ReaderPage> {
       setState(() {
         _selectedWord = null;
         _selectedWordIndex = null;
+        _invalidateCache();
       });
       return;
     }
 
-    final leftPart = screenWidth * 0.3;
-    final rightPart = screenWidth * 0.7;
+    const leftPart = 0.3;
+    const rightPart = 0.7;
 
-    if (tapX < leftPart) {
+    if (tapX < screenWidth * leftPart) {
       if (_hasPrevPage) _prevPage();
-    } else if (tapX > rightPart) {
+    } else if (tapX > screenWidth * rightPart) {
       if (_hasNextPage) _nextPage();
     } else {
       setState(() {
@@ -244,11 +332,56 @@ class _ReaderPageState extends State<ReaderPage> {
     }
   }
 
+  List<InlineSpan> _buildTextSpans(PageData currentPage) {
+    final pageHash = Object.hash(
+      _currentSectionIndex,
+      _currentPageIndex,
+      _selectedWordIndex,
+      _bookmarkedWords.length,
+    );
+
+    if (_cachedTextSpans != null && _cachedPageHash == pageHash) {
+      return _cachedTextSpans!;
+    }
+
+    final spans = List<InlineSpan>.generate(
+      currentPage.tokens.length,
+          (index) {
+        final token = currentPage.tokens[index];
+        final isSelected = _selectedWordIndex == index;
+        final isBookmarked = _bookmarkedWords.contains(
+          token.word.toLowerCase(),
+        );
+
+        return TextSpan(
+          text: token.text,
+          style: TextStyle(
+            backgroundColor: isSelected
+                ? Colors.yellow.withOpacity(0.5)
+                : isBookmarked
+                ? Colors.blue.withOpacity(0.1)
+                : null,
+            decoration: isBookmarked ? TextDecoration.underline : null,
+            decorationColor: Colors.blue.withOpacity(0.5),
+            decorationStyle: TextDecorationStyle.dotted,
+          ),
+          recognizer: TapGestureRecognizer()
+            ..onTap = () => _onWordTap(token.word, index),
+        );
+      },
+    );
+
+    _cachedTextSpans = spans;
+    _cachedPageHash = pageHash;
+
+    return spans;
+  }
+
   @override
   Widget build(BuildContext context) {
     final currentPages = _currentPages;
 
-    if (currentPages.isEmpty || currentPages.first.text.isEmpty) {
+    if (currentPages.isEmpty) {
       return Scaffold(
         appBar: AppBar(
           title: Text(widget.book.title),
@@ -258,7 +391,11 @@ class _ReaderPageState extends State<ReaderPage> {
       );
     }
 
-    final currentPage = currentPages[_currentPageIndex];
+    final currentPage = currentPages[_currentPageIndex.clamp(0, currentPages.length - 1)];
+    final mediaQuery = MediaQuery.of(context);
+    final topPadding = mediaQuery.padding.top;
+
+    const additionalTopPadding = 16.0;
 
     return Scaffold(
       body: Stack(
@@ -267,78 +404,49 @@ class _ReaderPageState extends State<ReaderPage> {
             onTapUp: _handleTap,
             child: Container(
               color: Colors.white,
-              padding: const EdgeInsets.all(24.0),
+              padding: EdgeInsets.only(
+                top: topPadding + 24.0 + additionalTopPadding,
+                left: 24.0,
+                right: 24.0,
+                bottom: 24.0,
+              ),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  /*if (_currentSection.title.isNotEmpty && _currentPageIndex == 0)
-                    Padding(
-                      padding: const EdgeInsets.only(bottom: 16.0),
-                      child: Text(
-                        _currentSection.title,
-                        style: TextStyle(
-                          fontSize: _fontSize + 4,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),*/
-
                   Expanded(
-                    child: SingleChildScrollView(
-                      physics: const NeverScrollableScrollPhysics(),
-                      child: RichText(
-                        textAlign: TextAlign.justify,
-                        text: TextSpan(
-                          style: TextStyle(
-                            fontSize: _fontSize,
-                            height: _lineHeight,
-                            color: Colors.black,
-                          ),
-                          children: currentPage.tokens.asMap().entries.map((entry) {
-                            final index = entry.key;
-                            final token = entry.value;
-                            final isSelected = _selectedWordIndex == index;
-                            final isBookmarked = _bookmarkedWords.contains(
-                              token.word.toLowerCase(),
-                            );
-
-                            return TextSpan(
-                              text: token.text,
-                              style: TextStyle(
-                                backgroundColor: isSelected
-                                    ? Colors.yellow.withOpacity(0.5)
-                                    : isBookmarked
-                                    ? Colors.blue.withOpacity(0.1)
-                                    : null,
-                                decoration: isBookmarked
-                                    ? TextDecoration.underline
-                                    : null,
-                                decorationColor: Colors.blue.withOpacity(0.5),
-                                decorationStyle: TextDecorationStyle.dotted,
+                    child: RepaintBoundary(
+                      child: Container(
+                        key: _textContainerKey,
+                        child: SingleChildScrollView(
+                          physics: const NeverScrollableScrollPhysics(),
+                          child: RichText(
+                            textAlign: TextAlign.justify,
+                            text: TextSpan(
+                              style: const TextStyle(
+                                fontSize: _fontSize,
+                                height: _lineHeight,
+                                color: Colors.black,
                               ),
-                              recognizer: TapGestureRecognizer()
-                                ..onTap = () => _onWordTap(token.word, index),
-                            );
-                          }).toList(),
+                              children: _buildTextSpans(currentPage),
+                            ),
+                          ),
                         ),
                       ),
                     ),
                   ),
-                  Padding(
-                    padding: const EdgeInsets.only(top: 16.0),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Text(
-                          'Section ${_currentSectionIndex + 1}/${widget.book.sections.length}',
-                          style: const TextStyle(color: Colors.grey, fontSize: 12),
-                        ),
-                        Text(
-                          'Page ${_currentPageIndex + 1}/${currentPages.length}',
-                          style: const TextStyle(color: Colors.grey, fontSize: 12),
-                        ),
-                      ],
-                    ),
+                  const SizedBox(height: 16.0),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        'Section ${_currentSectionIndex + 1}/${widget.book.sections.length}',
+                        style: const TextStyle(color: Colors.grey, fontSize: 12),
+                      ),
+                      Text(
+                        'Page ${_currentPageIndex + 1}/${currentPages.length}',
+                        style: const TextStyle(color: Colors.grey, fontSize: 12),
+                      ),
+                    ],
                   ),
                 ],
               ),
@@ -351,7 +459,7 @@ class _ReaderPageState extends State<ReaderPage> {
               left: 0,
               right: 0,
               child: Container(
-                height: kToolbarHeight + MediaQuery.of(context).padding.top,
+                height: kToolbarHeight + topPadding,
                 color: Theme.of(context).colorScheme.inversePrimary,
                 child: AppBar(
                   title: Text(widget.book.title),
@@ -371,7 +479,6 @@ class _ReaderPageState extends State<ReaderPage> {
                           ),
                         );
                         await _loadBookmarkedWords();
-                        setState(() {});
                       },
                     ),
                     if (_paginationService.isBackgroundPaginationRunning)
