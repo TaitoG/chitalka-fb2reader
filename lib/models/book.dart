@@ -26,6 +26,9 @@ class BookMetadata extends HiveObject {
   @HiveField(6)
   String? coverImage;
 
+  @HiveField(7)
+  DateTime? lastRead;
+
   BookMetadata({
     required this.title,
     required this.author,
@@ -34,6 +37,7 @@ class BookMetadata extends HiveObject {
     this.lastPosition,
     required this.addedDate,
     this.coverImage,
+    this.lastRead
   });
 }
 

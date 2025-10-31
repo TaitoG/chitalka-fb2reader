@@ -13,330 +13,228 @@ import 'reader.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({Key? key}) : super(key: key);
-
   @override
   State<HomePage> createState() => _HomePageState();
 }
 
 class _HomePageState extends State<HomePage> {
   late Box<BookMetadata> _booksBox;
-  late Box<String> _contentCache;
-  final Map<String, Book> _parsedBooksCache = {};
+  final TextEditingController _searchController = TextEditingController();
+  String _searchQuery = '';
   bool _isLoading = false;
-  bool _cacheInitialized = false;
+  String? _loadingMessage;
 
   @override
   void initState() {
     super.initState();
     _booksBox = Hive.box<BookMetadata>('books');
-    _initContentCache();
+    _searchController.addListener(() {
+      setState(() => _searchQuery = _searchController.text.toLowerCase());
+    });
   }
 
-  Future<void> _initContentCache() async {
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  List<BookMetadata> get _filteredBooks {
+    if (_searchQuery.isEmpty) {
+      return _booksBox.values.toList()
+        ..sort((a, b) => (b.lastRead ?? b.addedDate).compareTo(a.lastRead ?? a.addedDate));
+    }
+    return _booksBox.values.where((book) {
+      final title = book.title.toLowerCase();
+      final author = book.author.join(' ').toLowerCase();
+      return title.contains(_searchQuery) || author.contains(_searchQuery);
+    }).toList()
+      ..sort((a, b) => (b.lastRead ?? b.addedDate).compareTo(a.lastRead ?? a.addedDate));
+  }
+
+  Future<void> _openBook(BookMetadata metadata) async {
+    _showLoading('Opening "${metadata.title}"...');
     try {
-      _contentCache = await Hive.openBox<String>('book_contents');
-      _cacheInitialized = true;
-      print('✅ Content cache initialized with ${_contentCache.length} entries');
+      final content = await _loadContent(metadata.filePath);
+      final book = await _parseBook(content, metadata.filePath);
+
+      metadata.lastRead = DateTime.now();
+      await metadata.save();
+
+      _hideLoading();
+      if (!mounted) return;
+
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => ReaderPage(book: book, metadata: metadata),
+        ),
+      );
     } catch (e) {
-      print('❌ Error opening content cache: $e');
+      _hideLoading();
+      _showError('Failed to open book: $e');
     }
   }
 
-  Future<String> _extractFb2FromZip(String zipPath) async {
+  Future<void> _pickAndAddBook() async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['fb2', 'zip', 'fb2.zip'],
+    );
+
+    if (result == null || result.files.single.path == null) return;
+
+    final path = result.files.single.path!;
+    final fileName = path.split('/').last;
+
+    _showLoading('Adding "$fileName"...');
+
     try {
-      final file = File(zipPath);
-      final bytes = await file.readAsBytes();
-      final archive = ZipDecoder().decodeBytes(bytes);
+      final content = await _loadContent(path);
+      final parsed = Fb2Parse.parse(content);
 
-      for (final file in archive) {
-        final filename = file.name.toLowerCase();
-        if (filename.endsWith('.fb2') && file.isFile) {
-          final data = file.content as List<int>;
+      final metadata = BookMetadata(
+        title: parsed.title,
+        author: parsed.author,
+        annotation: parsed.annotation,
+        filePath: path,
+        addedDate: DateTime.now(),
+        lastRead: DateTime.now(),
+        coverImage: parsed.coverImage,
+      );
 
-          // Detect encoding from XML header
-          final head = utf8.decode(data.take(200).toList(), allowMalformed: true);
-          final encodingMatch =
-          RegExp(r'''encoding=["\']([A-Za-z0-9_\-]+)["\']''').firstMatch(head);
-          final encoding = encodingMatch?.group(1)?.toLowerCase() ?? 'utf-8';
+      await _booksBox.add(metadata);
+      _hideLoading();
 
-          try {
-            // Decode using proper encoding
-            final decoded = await CharsetConverter.decode(
-              encoding,
-              Uint8List.fromList(data),
-            );
-            print('✅ Decoded ZIP entry with $encoding');
-            return decoded;
-          } catch (e) {
-            print('⚠️ Charset decode failed ($encoding), fallback to UTF-8: $e');
-            return utf8.decode(data, allowMalformed: true);
-          }
-        }
-      }
-
-      throw Exception('FB2 file not found in ZIP archive');
+      _showSnackBar('Added: ${metadata.title}', Colors.green);
     } catch (e) {
-      print('❌ Error extracting ZIP: $e');
-      throw Exception('Failed to extract FB2 from ZIP: $e');
+      _hideLoading();
+      _showError('Failed to add book: $e');
     }
   }
 
   Future<String> _loadContent(String filePath) async {
-    if (_cacheInitialized && _contentCache.containsKey(filePath)) {
-      print('⚡ Loading content from cache: $filePath');
-      return _contentCache.get(filePath)!;
-    }
+    final bytes = await File(filePath).readAsBytes();
 
-    print('📖 Loading content from file: $filePath');
-
-    String content;
-    if (filePath.toLowerCase().endsWith('.zip') ||
-        filePath.toLowerCase().endsWith('.fb2.zip')) {
-      content = await _extractFb2FromZip(filePath);
-    } else {
-      final bytes = await File(filePath).readAsBytes();
-
-      // Detect encoding from header
-      final head = utf8.decode(bytes.take(200).toList(), allowMalformed: true);
-      final encodingMatch =
-      RegExp(r'''encoding=["\']([A-Za-z0-9_\-]+)["\']''').firstMatch(head);
-      final encoding = encodingMatch?.group(1)?.toLowerCase() ?? 'utf-8';
-
-      try {
-        content = await CharsetConverter.decode(encoding, bytes);
-        print('✅ Decoded file with $encoding');
-      } catch (e) {
-        print('⚠️ Charset decode failed ($encoding), fallback to UTF-8');
-        content = utf8.decode(bytes, allowMalformed: true);
+    if (filePath.toLowerCase().endsWith('.zip') || filePath.toLowerCase().endsWith('.fb2.zip')) {
+      final archive = ZipDecoder().decodeBytes(bytes);
+      for (final file in archive) {
+        if (file.name.toLowerCase().endsWith('.fb2') && file.isFile) {
+          return _decodeContent(file.content as List<int>);
+        }
       }
+      throw Exception('FB2 not found in ZIP');
+    } else {
+      return _decodeContent(bytes);
     }
+  }
 
-    if (_cacheInitialized) {
-      await _contentCache.put(filePath, content);
-      print('💾 Content cached');
+  Future<String> _decodeContent(List<int> data) async {
+    final head = utf8.decode(data.take(200).toList(), allowMalformed: true);
+    final encoding = RegExp(r'''encoding=["']([A-Za-z0-9_\-]+)["']''')
+        .firstMatch(head)
+        ?.group(1)
+        ?.toLowerCase() ?? 'utf-8';
+
+    try {
+      return await CharsetConverter.decode(encoding, Uint8List.fromList(data));
+    } catch (e) {
+      return utf8.decode(data, allowMalformed: true);
     }
-
-    return content;
   }
 
   Book _parseBook(String content, String filePath) {
-    if (_parsedBooksCache.containsKey(filePath)) {
-      print('⚡ Using parsed book from memory cache');
-      return _parsedBooksCache[filePath]!;
-    }
-
-    print('🔄 Parsing FB2...');
-
-    final parsedBook = Fb2Parse.parse(content);
-    final book = Book(
-      title: parsedBook.title,
-      author: parsedBook.author,
-      annotation: parsedBook.annotation,
-      sections: parsedBook.sections,
+    final parsed = Fb2Parse.parse(content);
+    return Book(
+      title: parsed.title,
+      author: parsed.author,
+      annotation: parsed.annotation,
+      sections: parsed.sections,
       content: content,
       filePath: filePath,
-      coverImage: parsedBook.coverImage,
+      coverImage: parsed.coverImage,
     );
-
-    _parsedBooksCache[filePath] = book;
-    print('✅ Book parsed and cached');
-
-    return book;
-  }
-
-  Future<void> _pickAndOpenBook() async {
-    try {
-      setState(() => _isLoading = true);
-
-      FilePickerResult? result = await FilePicker.platform.pickFiles(
-        type: FileType.custom,
-        allowedExtensions: ['fb2', 'zip', 'fb2.zip'],
-      );
-
-      if (result == null) {
-        setState(() => _isLoading = false);
-        return;
-      }
-
-      String? path = result.files.single.path;
-      if (path == null) {
-        setState(() => _isLoading = false);
-        return;
-      }
-
-      print('📚 Opening new book: $path');
-
-      String content = await _loadContent(path);
-
-      Book book = _parseBook(content, path);
-
-      final metadata = BookMetadata(
-        title: book.title,
-        author: book.author,
-        annotation: book.annotation,
-        filePath: path,
-        addedDate: DateTime.now(),
-        coverImage: book.coverImage,
-      );
-
-      await _booksBox.add(metadata);
-
-      setState(() => _isLoading = false);
-
-      if (!mounted) return;
-
-      await Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (context) => ReaderPage(
-            book: book,
-            metadata: metadata,
-          ),
-        ),
-      );
-    } catch (e) {
-      print('❌ Error: $e');
-      setState(() => _isLoading = false);
-
-      if (!mounted) return;
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Ошибка открытия файла: $e'),
-          backgroundColor: Colors.red,
-          duration: const Duration(seconds: 3),
-        ),
-      );
-    }
-  }
-
-  Future<void> _openBook(BookMetadata metadata) async {
-    try {
-      setState(() => _isLoading = true);
-
-      print('📖 Opening book: ${metadata.title}');
-
-      String content = await _loadContent(metadata.filePath);
-
-      Book book = _parseBook(content, metadata.filePath);
-
-      setState(() => _isLoading = false);
-
-      if (!mounted) return;
-
-      await Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (context) => ReaderPage(
-            book: book,
-            metadata: metadata,
-          ),
-        ),
-      );
-    } catch (e) {
-      print('❌ Error opening book: $e');
-      setState(() => _isLoading = false);
-
-      if (!mounted) return;
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Ошибка открытия книги: $e'),
-          backgroundColor: Colors.red,
-          duration: const Duration(seconds: 3),
-        ),
-      );
-    }
   }
 
   Future<void> _deleteBook(int index) async {
     final book = _booksBox.getAt(index);
-    if (book != null) {
-      final confirmed = await showDialog<bool>(
-        context: context,
-        builder: (context) => AlertDialog(
-          title: const Text('Delete book?'),
-          content: Text('Remove "${book.title}" from library?'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('Cancel'),
-            ),
-            TextButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('Delete', style: TextStyle(color: Colors.red)),
-            ),
-          ],
-        ),
-      );
+    if (book == null) return;
 
-      if (confirmed != true) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Delete book?'),
+        content: Text('Remove "${book.title}" from library?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('Delete', style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
 
-      if (_cacheInitialized) {
-        await _contentCache.delete(book.filePath);
-      }
-      _parsedBooksCache.remove(book.filePath);
-
-      print('🗑️ Deleted book and caches: ${book.title}');
-    }
+    if (confirmed != true) return;
 
     await _booksBox.deleteAt(index);
-    setState(() {});
+    _showSnackBar('Deleted: ${book.title}', Colors.orange);
+  }
+
+  void _showLoading(String message) {
+    setState(() {
+      _isLoading = true;
+      _loadingMessage = message;
+    });
+  }
+
+  void _hideLoading() {
+    setState(() {
+      _isLoading = false;
+      _loadingMessage = null;
+    });
+  }
+
+  void _showError(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), backgroundColor: Colors.red),
+    );
+  }
+
+  void _showSnackBar(String message, Color color) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message), backgroundColor: color),
+    );
   }
 
   Widget _buildBookCover(BookMetadata book) {
     if (book.coverImage != null && book.coverImage!.isNotEmpty) {
       try {
-        final imageBytes = base64.decode(book.coverImage!);
-        return Image.memory(
-          imageBytes,
-          fit: BoxFit.cover,
-          errorBuilder: (context, error, stackTrace) {
-            return _buildDefaultCover(book);
-          },
-        );
-      } catch (e) {
-        return _buildDefaultCover(book);
-      }
+        final bytes = base64.decode(book.coverImage!);
+        return Image.memory(bytes, fit: BoxFit.cover, errorBuilder: (_, __, ___) => _defaultCover(book));
+      } catch (_) {}
     }
-    return _buildDefaultCover(book);
+    return _defaultCover(book);
   }
 
-  Widget _buildDefaultCover(BookMetadata book) {
+  Widget _defaultCover(BookMetadata book) {
     final hash = book.title.hashCode;
-    final color = Color.fromARGB(
-      255,
-      (hash & 0xFF0000) >> 16,
-      (hash & 0x00FF00) >> 8,
-      hash & 0x0000FF,
-    ).withOpacity(0.3);
-
+    final color = Color((hash & 0xFFFFFF) | 0xFF000000).withOpacity(0.3);
     return Container(
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [
-            color,
-            color.withOpacity(0.6),
-          ],
-        ),
-      ),
+      decoration: BoxDecoration(gradient: LinearGradient(colors: [color, color.withOpacity(0.6)])),
       child: Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.menu_book, size: 48, color: Colors.white),
-            const SizedBox(height: 12),
+            const Icon(Icons.menu_book, size: 32, color: Colors.white),
+            const SizedBox(height: 8),
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8.0),
+              padding: const EdgeInsets.symmetric(horizontal: 8),
               child: Text(
                 book.title.split(' ').take(2).join('\n'),
-                style: const TextStyle(
-                  fontSize: 12,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.white,
-                ),
+                style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white),
                 textAlign: TextAlign.center,
                 maxLines: 3,
                 overflow: TextOverflow.ellipsis,
@@ -348,6 +246,15 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
+  String _formatDate(DateTime date) {
+    final diff = DateTime.now().difference(date);
+    if (diff.inDays == 0) return 'today';
+    if (diff.inDays == 1) return 'yesterday';
+    if (diff.inDays < 7) return '${diff.inDays}d ago';
+    if (diff.inDays < 30) return '${diff.inDays ~/ 7}w ago';
+    return '${diff.inDays ~/ 30}mo ago';
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -357,214 +264,178 @@ class _HomePageState extends State<HomePage> {
         foregroundColor: Colors.white,
         elevation: 2,
         actions: [
-          if (_cacheInitialized && _contentCache.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.only(right: 16.0),
-              child: Center(
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.2),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
+          if (_booksBox.isNotEmpty)
+            IconButton(
+              icon: const Icon(Icons.search),
+              onPressed: () {
+                showSearch(context: context, delegate: _BookSearchDelegate(_booksBox));
+              },
+            ),
+        ],
+      ),
+      body: Stack(
+        children: [
+          ValueListenableBuilder(
+            valueListenable: _booksBox.listenable(),
+            builder: (context, box, _) {
+              final books = _filteredBooks;
+              if (books.isEmpty) {
+                return Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      const Icon(Icons.flash_on, size: 16),
-                      const SizedBox(width: 4),
+                      Icon(Icons.menu_book, size: 80, color: Colors.grey[400]),
+                      const SizedBox(height: 20),
                       Text(
-                        '${_contentCache.length} cached',
-                        style: const TextStyle(fontSize: 12),
+                        _searchQuery.isEmpty ? 'No books' : 'Not found',
+                        style: TextStyle(fontSize: 18, color: Colors.grey[600]),
                       ),
+                      if (_searchQuery.isEmpty)
+                        const Padding(
+                          padding: EdgeInsets.only(top: 10),
+                          child: Text('Tap + to add', style: TextStyle(fontSize: 14, color: Colors.grey)),
+                        ),
                     ],
+                  ),
+                );
+              }
+
+              return GridView.builder(
+                padding: const EdgeInsets.all(16),
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: 3,
+                  crossAxisSpacing: 16,
+                  mainAxisSpacing: 16,
+                  childAspectRatio: 0.7,
+                ),
+                itemCount: books.length,
+                itemBuilder: (context, index) {
+                  final book = books[index];
+                  final originalIndex = _booksBox.values.toList().indexOf(book);
+
+                  return GestureDetector(
+                    onTap: () => _openBook(book),
+                    child: Card(
+                      elevation: 4,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      child: Stack(
+                        children: [
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              Expanded(child: ClipRRect(borderRadius: const BorderRadius.vertical(top: Radius.circular(12)), child: _buildBookCover(book))),
+                              Padding(
+                                padding: const EdgeInsets.all(6),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(book.author.join(', '), style: TextStyle(fontSize: 11, color: Colors.grey[600]), maxLines: 1, overflow: TextOverflow.ellipsis),
+                                    const SizedBox(height: 2),
+                                    Text('Read ${_formatDate(book.lastRead ?? book.addedDate)}', style: TextStyle(fontSize: 9, color: Colors.grey[500])),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                          Positioned(
+                            top: 6,
+                            right: 6,
+                            child: GestureDetector(
+                              onTap: () => _deleteBook(originalIndex),
+                              child: Container(
+                                padding: const EdgeInsets.all(4),
+                                decoration: BoxDecoration(color: Colors.red.withOpacity(0.9), borderRadius: BorderRadius.circular(20)),
+                                child: const Icon(Icons.close, size: 14, color: Colors.white),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              );
+            },
+          ),
+
+          if (_isLoading)
+            Container(
+              color: Colors.black54,
+              child: Center(
+                child: Card(
+                  margin: const EdgeInsets.all(40),
+                  child: Padding(
+                    padding: const EdgeInsets.all(20),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const CircularProgressIndicator(),
+                        const SizedBox(height: 16),
+                        Text(_loadingMessage ?? 'Loading...', style: const TextStyle(fontSize: 16)),
+                      ],
+                    ),
                   ),
                 ),
               ),
             ),
         ],
       ),
-      body: _isLoading
-          ? const Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            CircularProgressIndicator(),
-            SizedBox(height: 16),
-            Text('Loading book...'),
-          ],
-        ),
-      )
-          : ValueListenableBuilder(
-        valueListenable: _booksBox.listenable(),
-        builder: (context, Box<BookMetadata> box, _) {
-          if (box.isEmpty) {
-            return Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(Icons.menu_book, size: 80, color: Colors.grey[400]),
-                  const SizedBox(height: 20),
-                  Text(
-                    'No books in library',
-                    style: TextStyle(
-                      fontSize: 18,
-                      color: Colors.grey[600],
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  Text(
-                    'Tap + to add your first book',
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: Colors.grey[500],
-                    ),
-                  ),
-                ],
-              ),
-            );
-          }
-
-          return GridView.builder(
-            padding: const EdgeInsets.all(16),
-            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: 3,
-              crossAxisSpacing: 16,
-              mainAxisSpacing: 16,
-              childAspectRatio: 0.7,
-            ),
-            itemCount: box.length,
-            itemBuilder: (context, index) {
-              final book = box.getAt(index)!;
-              final isCached = _cacheInitialized &&
-                  _contentCache.containsKey(book.filePath);
-
-              return GestureDetector(
-                onTap: () => _openBook(book),
-                onLongPress: () => _deleteBook(index),
-                child: Card(
-                  elevation: 4,
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Stack(
-                    children: [
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          // Book Cover
-                          Expanded(
-                            child: ClipRRect(
-                              borderRadius: const BorderRadius.only(
-                                topLeft: Radius.circular(12),
-                                topRight: Radius.circular(12),
-                              ),
-                              child: _buildBookCover(book),
-                            ),
-                          ),
-
-                          // Book Info
-                          Padding(
-                            padding: const EdgeInsets.all(12),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  book.title,
-                                  style: const TextStyle(
-                                    fontSize: 14,
-                                    fontWeight: FontWeight.bold,
-                                    height: 1.2,
-                                  ),
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  book.author.join(', '),
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    color: Colors.grey[600],
-                                  ),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                                const SizedBox(height: 8),
-                                Row(
-                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                  children: [
-                                    Expanded(
-                                      child: Text(
-                                        'Added ${_formatDate(book.addedDate)}',
-                                        style: TextStyle(
-                                          fontSize: 10,
-                                          color: Colors.grey[500],
-                                        ),
-                                      ),
-                                    ),
-                                    IconButton(
-                                      icon: const Icon(Icons.delete, size: 18),
-                                      onPressed: () => _deleteBook(index),
-                                      padding: EdgeInsets.zero,
-                                      constraints: const BoxConstraints(),
-                                      tooltip: 'Delete book',
-                                    ),
-                                  ],
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-
-                      if (isCached)
-                        Positioned(
-                          top: 8,
-                          right: 8,
-                          child: Container(
-                            padding: const EdgeInsets.all(6),
-                            decoration: BoxDecoration(
-                              color: Colors.green.withOpacity(0.9),
-                              borderRadius: BorderRadius.circular(20),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.black.withOpacity(0.2),
-                                  blurRadius: 4,
-                                ),
-                              ],
-                            ),
-                            child: const Icon(
-                              Icons.flash_on,
-                              size: 16,
-                              color: Colors.white,
-                            ),
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-              );
-            },
-          );
-        },
-      ),
       floatingActionButton: FloatingActionButton(
-        onPressed: _pickAndOpenBook,
+        onPressed: _pickAndAddBook,
         backgroundColor: Colors.deepPurple,
-        foregroundColor: Colors.white,
-        tooltip: 'Add book',
-        child: const Icon(Icons.add),
+        child: const Icon(Icons.add, color: Colors.white),
       ),
     );
   }
+}
 
-  String _formatDate(DateTime date) {
-    final now = DateTime.now();
-    final difference = now.difference(date);
+class _BookSearchDelegate extends SearchDelegate<String> {
+  final Box<BookMetadata> box;
+  _BookSearchDelegate(this.box);
 
-    if (difference.inDays == 0) return 'today';
-    if (difference.inDays == 1) return 'yesterday';
-    if (difference.inDays < 7) return '${difference.inDays}d ago';
-    if (difference.inDays < 30) return '${difference.inDays ~/ 7}w ago';
-    return '${difference.inDays ~/ 30}mo ago';
+  @override
+  List<Widget> buildActions(BuildContext context) => [
+    IconButton(icon: const Icon(Icons.clear), onPressed: () => query = ''),
+  ];
+
+  @override
+  Widget buildLeading(BuildContext context) => IconButton(
+    icon: const Icon(Icons.arrow_back),
+    onPressed: () => close(context, ''),
+  );
+
+  @override
+  Widget buildResults(BuildContext context) => _buildSearchResults();
+
+  @override
+  Widget buildSuggestions(BuildContext context) => _buildSearchResults();
+
+  Widget _buildSearchResults() {
+    final results = box.values.where((b) =>
+    b.title.toLowerCase().contains(query.toLowerCase()) ||
+        b.author.any((a) => a.toLowerCase().contains(query.toLowerCase()))
+    ).toList();
+
+    if (results.isEmpty) {
+      return const Center(child: Text('Not found'));
+    }
+
+    return ListView.builder(
+      itemCount: results.length,
+      itemBuilder: (context, i) {
+        final book = results[i];
+        return ListTile(
+          leading: book.coverImage != null
+              ? Image.memory(base64.decode(book.coverImage!), width: 40, height: 40, fit: BoxFit.cover)
+              : const Icon(Icons.book),
+          title: Text(book.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+          subtitle: Text(book.author.join(', '), style: const TextStyle(fontSize: 12)),
+          onTap: () {
+            close(context, '');
+            (context as Element).findAncestorStateOfType<_HomePageState>()?._openBook(book);
+          },
+        );
+      },
+    );
   }
 }

@@ -24,13 +24,14 @@ class BookMetadataAdapter extends TypeAdapter<BookMetadata> {
       lastPosition: fields[4] as int?,
       addedDate: fields[5] as DateTime,
       coverImage: fields[6] as String?,
+      lastRead: fields[7] as DateTime?,
     );
   }
 
   @override
   void write(BinaryWriter writer, BookMetadata obj) {
     writer
-      ..writeByte(7)
+      ..writeByte(8)
       ..writeByte(0)
       ..write(obj.title)
       ..writeByte(1)
@@ -44,7 +45,9 @@ class BookMetadataAdapter extends TypeAdapter<BookMetadata> {
       ..writeByte(5)
       ..write(obj.addedDate)
       ..writeByte(6)
-      ..write(obj.coverImage);
+      ..write(obj.coverImage)
+      ..writeByte(7)
+      ..write(obj.lastRead);
   }
 
   @override

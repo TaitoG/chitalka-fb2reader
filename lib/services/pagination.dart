@@ -1,358 +1,143 @@
-// services/pagination_optimized.dart
+// services/pagination.dart
+import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:hive/hive.dart';
 import 'package:chitalka/models/book.dart';
-import 'package:chitalka/models/pagination_cache.dart';
 import 'package:chitalka/models/page_data.dart';
 import 'package:chitalka/models/word_token.dart';
 import 'package:chitalka/core/tokenizer.dart';
 
-class PaginationService {
-  Box<PaginationCache>? _cacheBox;
-  PaginationCache? _currentCache;
+class PaginationService extends ChangeNotifier {
+  static const int MAX_CACHED_SECTIONS = 7;
+  static const int TOKENS_PER_YIELD = 50;
+
   final Map<int, List<PageData>> _sectionPages = {};
-  final Set<int> _paginatedSections = {};
+  final Map<int, Completer<void>> _paginationCompleters = {};
+  final List<int> _accessOrder = <int>[];
   final Set<int> _paginatingNow = {};
-  bool _isBackgroundPaginationRunning = false;
+  final Map<String, int> _estimationCache = {};
 
-  final Set<int> _dirtySections = {};
-  DateTime? _lastSaveTime;
+  final TextPainter _textPainter = TextPainter(
+    textDirection: TextDirection.ltr,
+    textAlign: TextAlign.justify,
+  );
 
-  VoidCallback? onPaginationUpdate;
-  VoidCallback? onBackgroundPaginationComplete;
+  final Map<double, double> _avgCharWidthCache = {};
 
-  bool get isBackgroundPaginationRunning => _isBackgroundPaginationRunning;
-  Map<int, List<PageData>> get sectionPages => _sectionPages;
-  PaginationCache? get currentCache => _currentCache;
+  void _touchSection(int sectionIndex) {
+    _accessOrder.remove(sectionIndex);
+    _accessOrder.add(sectionIndex);
 
-  Future<void> initializeCache() async {
-    if (_cacheBox != null) {
-      print('✅ Cache box already initialized');
-      return;
-    }
-
-    print('📦 Opening pagination cache box...');
-    try {
-      _cacheBox = await Hive.openBox<PaginationCache>('pagination_cache');
-      print('✅ Cache box opened successfully. Keys: ${_cacheBox?.keys.length}');
-    } catch (e) {
-      print('❌ Error opening cache box: $e');
+    while (_accessOrder.length > MAX_CACHED_SECTIONS) {
+      final lru = _accessOrder.removeAt(0);
+      _sectionPages.remove(lru);
+      _paginationCompleters.remove(lru);
+      print('Evicted section $lru from RAM');
     }
   }
 
-  Future<void> loadOrCreatePagination({
-    required Book book,
-    required String? cacheKey,
-    required double fontSize,
-    required double lineHeight,
-    required Size screenSize,
-    required double textContainerHeight,
-    required int currentSectionIndex,
-  }) async {
-    if (cacheKey == null) {
-      print('❌ cacheKey is null!');
-      return;
+  double _measureAverageCharWidth(TextStyle textStyle) {
+    final fontSize = textStyle.fontSize ?? 14.0;
+
+    if (_avgCharWidthCache.containsKey(fontSize)) {
+      return _avgCharWidthCache[fontSize]!;
     }
 
-    print('📖 Loading pagination for: $cacheKey');
-    print('📦 Available cache keys: ${_cacheBox?.keys.toList()}');
+    const sampleText = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzАБВГДЕЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯабвгдежзийклмнопрстуфхцчшщъыьэюя';
+    _textPainter
+      ..text = TextSpan(text: sampleText, style: textStyle)
+      ..layout();
 
-    _currentCache = _cacheBox?.get(cacheKey);
-    print('🔍 Cache lookup result: ${_currentCache != null ? "FOUND" : "NOT FOUND"}');
+    final avgWidth = _textPainter.width / sampleText.length;
+    _avgCharWidthCache[fontSize] = avgWidth;
 
-    if (_currentCache != null) {
-      print('✅ Cache found! Checking validity...');
-
-      final isValid = _isCacheValid(
-        _currentCache!,
-        fontSize,
-        lineHeight,
-        screenSize.width,
-        screenSize.height,
-      );
-
-      if (isValid) {
-        print('✅ Cache is valid! Loading sections...');
-        print('📚 Cached sections: ${_currentCache!.sections.keys.toList()}');
-
-        await loadSectionFromCache(currentSectionIndex);
-
-        preloadNearbySections(currentSectionIndex, book.sections.length);
-
-        print('✅ Loaded ${_paginatedSections.length} sections from cache');
-
-        if (_paginatedSections.length < book.sections.length) {
-          print('🔄 Starting background pagination for remaining sections...');
-          startBackgroundPagination(
-            book: book,
-            fontSize: fontSize,
-            lineHeight: lineHeight,
-            screenSize: screenSize,
-            textContainerHeight: textContainerHeight,
-            startFrom: currentSectionIndex,
-          );
-        } else {
-          print('✅ All sections already cached!');
-        }
-
-        return;
-      } else {
-        print('❌ Cache invalid (screen size or font changed), recreating...');
-      }
-    } else {
-      print('❌ No cache found, creating new...');
-    }
-
-    _currentCache = PaginationCache(
-      bookFilePath: cacheKey,
-      fontSize: fontSize,
-      lineHeight: lineHeight,
-      screenWidth: screenSize.width,
-      screenHeight: screenSize.height,
-      sections: {},
-      createdAt: DateTime.now(),
-    );
-
-    print('⚡ Paginating current section only...');
-
-    await _paginateSectionFast(
-      book: book,
-      sectionIndex: currentSectionIndex,
-      fontSize: fontSize,
-      lineHeight: lineHeight,
-      screenSize: screenSize,
-      textContainerHeight: textContainerHeight,
-    );
-
-    print('✅ Current section ready, starting background pagination...');
-
-    startBackgroundPagination(
-      book: book,
-      fontSize: fontSize,
-      lineHeight: lineHeight,
-      screenSize: screenSize,
-      textContainerHeight: textContainerHeight,
-      startFrom: currentSectionIndex,
-    );
+    return avgWidth;
   }
 
-  bool _isCacheValid(
-      PaginationCache cache,
-      double fontSize,
-      double lineHeight,
-      double screenWidth,
-      double screenHeight,
-      ) {
-    const tolerance = 5.0;
-
-    final fontMatch = (cache.fontSize - fontSize).abs() < 0.1;
-    final lineHeightMatch = (cache.lineHeight - lineHeight).abs() < 0.01;
-    final widthMatch = (cache.screenWidth - screenWidth).abs() < tolerance;
-    final heightMatch = (cache.screenHeight - screenHeight).abs() < tolerance;
-
-    return fontMatch && lineHeightMatch && widthMatch && heightMatch;
-  }
-
-  Future<void> loadSectionFromCache(int sectionIndex) async {
-    if (_currentCache?.sections.containsKey(sectionIndex) ?? false) {
-      final cachedSection = _currentCache!.sections[sectionIndex]!;
-      _sectionPages[sectionIndex] = cachedSection.pages.map((pageData) {
-        return PageData(
-          text: pageData.text,
-          tokens: pageData.tokens.map((tokenData) {
-            return WordToken(
-              text: tokenData.text,
-              word: tokenData.word,
-              startOffset: tokenData.startOffset,
-            );
-          }).toList(),
-        );
-      }).toList();
-
-      _paginatedSections.add(sectionIndex);
-    }
-  }
-
-  void preloadNearbySections(int currentSectionIndex, int totalSections) {
-    final sectionsToLoad = <int>[];
-
-    for (int i = 3; i >= 1; i--) {
-      if (currentSectionIndex - i >= 0) {
-        sectionsToLoad.add(currentSectionIndex - i);
-      }
-    }
-    for (int i = 1; i <= 3; i++) {
-      if (currentSectionIndex + i < totalSections) {
-        sectionsToLoad.add(currentSectionIndex + i);
-      }
-    }
-
-    for (final sectionIndex in sectionsToLoad) {
-      if (!_paginatedSections.contains(sectionIndex)) {
-        loadSectionFromCache(sectionIndex);
-      }
-    }
-  }
-
-  void startBackgroundPagination({
-    required Book book,
-    required double fontSize,
-    required double lineHeight,
-    required Size screenSize,
-    required double textContainerHeight,
-    int startFrom = 0,
-  }) {
-    if (_isBackgroundPaginationRunning) return;
-    _isBackgroundPaginationRunning = true;
-
-    Future.microtask(() {
-      _paginateNextSection(
-        book: book,
-        fontSize: fontSize,
-        lineHeight: lineHeight,
-        screenSize: screenSize,
-        textContainerHeight: textContainerHeight,
-        prioritySection: startFrom,
-      );
-    });
-  }
-
-  Future<void> _paginateNextSection({
-    required Book book,
-    required double fontSize,
-    required double lineHeight,
-    required Size screenSize,
-    required double textContainerHeight,
-    int? prioritySection,
-  }) async {
-    if (!_isBackgroundPaginationRunning) return;
-
-    int? nextSection;
-
-    if (prioritySection != null) {
-      for (int offset in [1, -1, 2, -2, 3, -3, 4, -4, 5, -5]) {
-        final candidate = prioritySection + offset;
-        if (candidate >= 0 &&
-            candidate < book.sections.length &&
-            !_paginatedSections.contains(candidate) &&
-            !_paginatingNow.contains(candidate)) {
-          nextSection = candidate;
-          break;
-        }
-      }
-    }
-
-    if (nextSection == null) {
-      for (int i = 0; i < book.sections.length; i++) {
-        if (!_paginatedSections.contains(i) && !_paginatingNow.contains(i)) {
-          nextSection = i;
-          break;
-        }
-      }
-    }
-
-    if (nextSection != null) {
-      await _paginateSectionFast(
-        book: book,
-        sectionIndex: nextSection,
-        fontSize: fontSize,
-        lineHeight: lineHeight,
-        screenSize: screenSize,
-        textContainerHeight: textContainerHeight,
-        background: true,
-      );
-
-      await Future.delayed(const Duration(milliseconds: 30));
-
-      _paginateNextSection(
-        book: book,
-        fontSize: fontSize,
-        lineHeight: lineHeight,
-        screenSize: screenSize,
-        textContainerHeight: textContainerHeight,
-        prioritySection: prioritySection,
-      );
-    } else {
-      print('✅ Background pagination complete! Total sections: ${_paginatedSections.length}');
-      _isBackgroundPaginationRunning = false;
-      await _saveDirtySections();
-      onBackgroundPaginationComplete?.call();
-    }
-  }
-
-  Future<void> _paginateSectionFast({
+  Future<void> _paginateSectionIncremental({
     required Book book,
     required int sectionIndex,
     required double fontSize,
     required double lineHeight,
     required Size screenSize,
     required double textContainerHeight,
-    bool background = false,
   }) async {
-    if (_paginatedSections.contains(sectionIndex) || _paginatingNow.contains(sectionIndex)) {
-      return;
-    }
-
-    _paginatingNow.add(sectionIndex);
-
     final section = book.sections[sectionIndex];
-    final paragraphs = section.paragraphs;
     final padding = const EdgeInsets.all(24.0);
     final availableHeight = textContainerHeight;
     final availableWidth = screenSize.width - padding.horizontal;
-
     final textStyle = TextStyle(fontSize: fontSize, height: lineHeight);
 
-    final textPainter = TextPainter(
-      textDirection: TextDirection.ltr,
-      maxLines: null,
-    );
-
-    final avgCharWidth = fontSize * 0.55;
+    final avgCharWidth = _measureAverageCharWidth(textStyle);
     final charsPerLine = (availableWidth / avgCharWidth).floor();
     final lineHeightPx = fontSize * lineHeight;
     final linesPerPage = (availableHeight / lineHeightPx).floor();
     final estimatedCharsPerPage = charsPerLine * linesPerPage;
 
+    final allTokens = _tokenizeSectionSync(section.paragraphs);
+
     List<PageData> pages = [];
     List<WordToken> currentPageTokens = [];
     int currentEstimatedChars = 0;
+    int tokensSinceYield = 0;
 
-    final allTokens = <WordToken>[];
-    for (final paragraph in paragraphs) {
-      allTokens.addAll(TextTokenizer.tokenize(paragraph + '\n\u00A0\u00A0\u00A0'));
-    }
-
-    int tokenIndex = 0;
-    int lastCheckIndex = 0;
-
-    while (tokenIndex < allTokens.length) {
+    for (int tokenIndex = 0; tokenIndex < allTokens.length; tokenIndex++) {
       final token = allTokens[tokenIndex];
       currentPageTokens.add(token);
       currentEstimatedChars += token.text.length;
-      tokenIndex++;
+      tokensSinceYield++;
+
+      if (tokensSinceYield >= TOKENS_PER_YIELD) {
+        await Future.delayed(Duration.zero);
+        tokensSinceYield = 0;
+      }
 
       if (currentEstimatedChars >= estimatedCharsPerPage * 0.85) {
-        if (tokenIndex - lastCheckIndex >= 10 || currentEstimatedChars >= estimatedCharsPerPage) {
-          final currentText = currentPageTokens.map((t) => t.text).join();
-          textPainter.text = TextSpan(text: currentText, style: textStyle);
-          textPainter.layout(maxWidth: availableWidth);
-          lastCheckIndex = tokenIndex;
+        final currentText = currentPageTokens.map((t) => t.text).join();
+        _textPainter
+          ..text = TextSpan(text: currentText, style: textStyle)
+          ..layout(maxWidth: availableWidth);
 
-          if (textPainter.height > availableHeight) {
-            currentPageTokens.removeLast();
-            tokenIndex--;
+        if (_textPainter.height > availableHeight) {
+          int left = 0;
+          int right = currentPageTokens.length - 1;
+          int bestFit = right;
 
-            if (currentPageTokens.isNotEmpty) {
-              pages.add(PageData(
-                text: currentPageTokens.map((t) => t.text).join().trim(),
-                tokens: List.from(currentPageTokens),
-              ));
+          while (left <= right) {
+            final mid = (left + right) ~/ 2;
+            final testText = currentPageTokens.sublist(0, mid + 1).map((t) => t.text).join();
+            _textPainter
+              ..text = TextSpan(text: testText, style: textStyle)
+              ..layout(maxWidth: availableWidth);
+
+            if (_textPainter.height <= availableHeight) {
+              bestFit = mid;
+              left = mid + 1;
+            } else {
+              right = mid - 1;
             }
-
-            currentPageTokens = [];
-            currentEstimatedChars = 0;
           }
+
+          final pageTokens = currentPageTokens.sublist(0, bestFit + 1);
+          final remainingTokens = currentPageTokens.sublist(bestFit + 1);
+
+          final indentTokens = TextTokenizer.tokenize('\u200B' * 50);
+          pageTokens.addAll(indentTokens);
+
+          if (pageTokens.isNotEmpty) {
+            final page = PageData(
+              text: pageTokens.map((t) => t.text).join().trim(),
+              tokens: List.unmodifiable(pageTokens),
+            );
+            pages.add(page);
+
+            _sectionPages[sectionIndex] = List.from(pages);
+            notifyListeners();
+
+            await Future.delayed(Duration.zero);
+          }
+
+          currentPageTokens = remainingTokens;
+          currentEstimatedChars = remainingTokens.fold(0, (sum, t) => sum + t.text.length);
         }
       }
     }
@@ -360,82 +145,127 @@ class PaginationService {
     if (currentPageTokens.isNotEmpty) {
       pages.add(PageData(
         text: currentPageTokens.map((t) => t.text).join().trim(),
-        tokens: List.from(currentPageTokens),
+        tokens: List.unmodifiable(currentPageTokens),
       ));
+      _sectionPages[sectionIndex] = pages;
+      notifyListeners();
+    }
+  }
+
+  List<WordToken> _tokenizeSectionSync(List<String> paragraphs) {
+    final tokens = <WordToken>[];
+    for (final p in paragraphs) {
+      tokens.addAll(TextTokenizer.tokenize(p + '\n   '));
+    }
+    return tokens;
+  }
+
+  Future<void> paginateSection({
+    required Book book,
+    required int sectionIndex,
+    required double fontSize,
+    required double lineHeight,
+    required Size screenSize,
+    required double textContainerHeight,
+  }) async {
+    if (_sectionPages.containsKey(sectionIndex)) {
+      _touchSection(sectionIndex);
+      return;
     }
 
-    _sectionPages[sectionIndex] = pages;
-    _paginatedSections.add(sectionIndex);
-    _paginatingNow.remove(sectionIndex);
+    if (_paginatingNow.contains(sectionIndex)) {
+      await _paginationCompleters[sectionIndex]?.future;
+      return;
+    }
 
-    if (_currentCache != null) {
-      _currentCache!.sections[sectionIndex] = SectionPaginationData(
+    _paginatingNow.add(sectionIndex);
+    _paginationCompleters[sectionIndex] = Completer<void>();
+
+    try {
+      await _paginateSectionIncremental(
+        book: book,
         sectionIndex: sectionIndex,
-        pages: pages.map((page) => PageTokenData(
-          text: page.text,
-          tokens: page.tokens.map((token) => TokenData(
-            text: token.text,
-            word: token.word,
-            startOffset: token.startOffset,
-          )).toList(),
-        )).toList(),
+        fontSize: fontSize,
+        lineHeight: lineHeight,
+        screenSize: screenSize,
+        textContainerHeight: textContainerHeight,
       );
 
-      _dirtySections.add(sectionIndex);
-
-      if (_dirtySections.length >= 10 ||
-          (_lastSaveTime != null &&
-              DateTime.now().difference(_lastSaveTime!) > const Duration(seconds: 15))) {
-        await _saveDirtySections();
-      }
+      _touchSection(sectionIndex);
+      _paginationCompleters[sectionIndex]?.complete();
+    } catch (e) {
+      _paginationCompleters[sectionIndex]?.completeError(e);
+      rethrow;
+    } finally {
+      _paginatingNow.remove(sectionIndex);
     }
-
-    if (!background) {
-      onPaginationUpdate?.call();
-    }
-  }
-
-  Future<void> _saveDirtySections() async {
-    if (_dirtySections.isEmpty || _currentCache == null) return;
-
-    print('💾 Saving ${_dirtySections.length} sections to cache...');
-    print('🔑 Cache key: ${_currentCache!.bookFilePath}');
-
-    final cacheKey = _currentCache!.bookFilePath;
-    await _cacheBox?.put(cacheKey, _currentCache!);
-
-    await _cacheBox?.flush();
-
-    _dirtySections.clear();
-    _lastSaveTime = DateTime.now();
-
-    print('✅ Cache saved and flushed to disk');
-    print('📦 All cache keys now: ${_cacheBox?.keys.toList()}');
-  }
-
-  bool isSectionLoaded(int sectionIndex) {
-    return _paginatedSections.contains(sectionIndex);
   }
 
   List<PageData> getSectionPages(int sectionIndex) {
-    return _sectionPages[sectionIndex] ?? [PageData(text: '', tokens: [])];
+    final pages = _sectionPages[sectionIndex];
+    if (pages != null && pages.isNotEmpty) {
+      _touchSection(sectionIndex);
+      return pages;
+    }
+    return [];
   }
 
-  Future<void> saveCacheToHive() async {
-    await _saveDirtySections();
+  bool isSectionReady(int sectionIndex) {
+    return _sectionPages.containsKey(sectionIndex) &&
+        _sectionPages[sectionIndex]!.isNotEmpty;
+  }
+
+  bool isSectionPaginating(int sectionIndex) {
+    return _paginatingNow.contains(sectionIndex);
+  }
+
+  int getSectionPageCount(int sectionIndex) {
+    return _sectionPages[sectionIndex]?.length ?? 0;
+  }
+
+  Future<int> estimateTotalPages({
+    required Book book,
+    required double fontSize,
+    required double lineHeight,
+    required double availableWidth,
+    required double availableHeight,
+  }) async {
+    final key = '${fontSize.round()}|${availableWidth.round()}|${availableHeight.round()}';
+    if (_estimationCache.containsKey(key)) return _estimationCache[key]!;
+
+    int totalChars = 0;
+    for (final section in book.sections) {
+      for (final p in section.paragraphs) {
+        totalChars += p.length;
+      }
+      totalChars += 2;
+    }
+
+    final textStyle = TextStyle(fontSize: fontSize, height: lineHeight);
+    final avgCharWidth = _measureAverageCharWidth(textStyle);
+    final charsPerLine = (availableWidth / avgCharWidth).floor();
+    final lineHeightPx = fontSize * lineHeight;
+    final linesPerPage = (availableHeight / lineHeightPx).floor();
+    final charsPerPage = charsPerLine * linesPerPage;
+
+    final estimated = (totalChars / charsPerPage * 1.05).ceil();
+    _estimationCache[key] = estimated;
+    return estimated;
   }
 
   void clear() {
     _sectionPages.clear();
-    _paginatedSections.clear();
+    _accessOrder.clear();
     _paginatingNow.clear();
-    _currentCache = null;
-    _isBackgroundPaginationRunning = false;
-    _dirtySections.clear();
+    _paginationCompleters.clear();
+    _estimationCache.clear();
+    _avgCharWidthCache.clear();
   }
 
-  Future<void> dispose() async {
-    _isBackgroundPaginationRunning = false;
-    await saveCacheToHive();
+  @override
+  void dispose() {
+    _textPainter.dispose();
+    clear();
+    super.dispose();
   }
 }
