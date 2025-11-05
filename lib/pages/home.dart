@@ -10,6 +10,7 @@ import 'package:charset_converter/charset_converter.dart';
 import '../core/fb2.dart';
 import '../models/book.dart';
 import 'reader.dart';
+import 'custom_reader.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({Key? key}) : super(key: key);
@@ -67,7 +68,7 @@ class _HomePageState extends State<HomePage> {
       await Navigator.push(
         context,
         MaterialPageRoute(
-          builder: (_) => ReaderPage(book: book, metadata: metadata),
+          builder: (_) => RenderObjectReaderPage(book: book, metadata: metadata),
         ),
       );
     } catch (e) {

@@ -28,7 +28,7 @@ class _ReaderPageState extends State<ReaderPage> {
   // Constants
   static const double _lineHeight = 1.4;
   static const TextStyle _pageInfoStyle = TextStyle(color: Colors.grey, fontSize: 12);
-  static const EdgeInsets _contentPadding = EdgeInsets.all(24.0);
+  static const EdgeInsets _contentPadding = EdgeInsets.symmetric(horizontal: 24.0);
 
   // UI State
   int _currentSectionIndex = 0;
@@ -51,7 +51,6 @@ class _ReaderPageState extends State<ReaderPage> {
 
   int _estimatedTotalPages = 0;
   Timer? _paginationDebounce;
-  Timer? _fontSizeDebounce;
 
   final Map<int, TapGestureRecognizer> _gestureRecognizers = {};
 
@@ -116,7 +115,7 @@ class _ReaderPageState extends State<ReaderPage> {
 
       final size = MediaQuery.of(context).size;
 
-      // Start pagination without waiting
+      // Запускаем пагинацию текущей секции
       _paginationService.paginateSection(
         book: widget.book,
         sectionIndex: _currentSectionIndex,
@@ -126,9 +125,10 @@ class _ReaderPageState extends State<ReaderPage> {
         textContainerHeight: textHeight,
       );
 
-      // Preload adjacent sections in background
+      // Предзагружаем соседние секции
       _preloadAdjacentSections(size, textHeight);
 
+      // Оцениваем общее количество страниц
       if (_estimatedTotalPages == 0) {
         final estimated = await _paginationService.estimateTotalPages(
           book: widget.book,
@@ -145,7 +145,6 @@ class _ReaderPageState extends State<ReaderPage> {
   }
 
   void _preloadAdjacentSections(Size size, double textHeight) {
-    // Preload in background without blocking
     for (int i = 1; i <= 2; i++) {
       if (_currentSectionIndex - i >= 0) {
         _paginationService.paginateSection(
@@ -155,7 +154,7 @@ class _ReaderPageState extends State<ReaderPage> {
           lineHeight: _lineHeight,
           screenSize: size,
           textContainerHeight: textHeight,
-        ).catchError((e) => print('Preload error section ${_currentSectionIndex - i}: $e'));
+        ).catchError((e) => print('Preload error: $e'));
       }
       if (_currentSectionIndex + i < widget.book.sections.length) {
         _paginationService.paginateSection(
@@ -165,7 +164,7 @@ class _ReaderPageState extends State<ReaderPage> {
           lineHeight: _lineHeight,
           screenSize: size,
           textContainerHeight: textHeight,
-        ).catchError((e) => print('Preload error section ${_currentSectionIndex + i}: $e'));
+        ).catchError((e) => print('Preload error: $e'));
       }
     }
   }
@@ -176,7 +175,6 @@ class _ReaderPageState extends State<ReaderPage> {
     _paginationService.removeListener(_onPaginationUpdate);
     _paginationService.dispose();
     _paginationDebounce?.cancel();
-    _fontSizeDebounce?.cancel();
     _cleanupRecognizers();
     super.dispose();
   }
@@ -213,7 +211,6 @@ class _ReaderPageState extends State<ReaderPage> {
         _resetSelectionState();
       });
 
-      // Start pagination if not ready
       if (_measuredTextHeight != null && !_paginationService.isSectionReady(nextSectionIndex)) {
         final size = MediaQuery.of(context).size;
         _paginationService.paginateSection(
@@ -224,7 +221,6 @@ class _ReaderPageState extends State<ReaderPage> {
           screenSize: size,
           textContainerHeight: _measuredTextHeight!,
         );
-
         _preloadAdjacentSections(size, _measuredTextHeight!);
       }
     }
@@ -240,7 +236,6 @@ class _ReaderPageState extends State<ReaderPage> {
     } else if (_currentSectionIndex > 0) {
       final prevSectionIndex = _currentSectionIndex - 1;
 
-      // Start pagination if not ready
       if (_measuredTextHeight != null && !_paginationService.isSectionReady(prevSectionIndex)) {
         final size = MediaQuery.of(context).size;
         _paginationService.paginateSection(
@@ -253,7 +248,6 @@ class _ReaderPageState extends State<ReaderPage> {
         );
       }
 
-      // Wait a bit for at least first page
       await Future.delayed(const Duration(milliseconds: 100));
 
       final pages = _paginationService.getSectionPages(prevSectionIndex);
@@ -385,36 +379,18 @@ class _ReaderPageState extends State<ReaderPage> {
               Slider(
                 min: 14, max: 28, divisions: 14,
                 value: temp,
-                onChanged: (v) {
-                  setDialogState(() => temp = v);
-
-                  _fontSizeDebounce?.cancel();
-                  _fontSizeDebounce = Timer(const Duration(milliseconds: 300), () {
-                    setState(() {
-                      _fontSize = temp;
-                      _measuredTextHeight = null;
-                      _paginationService.clear();
-                      _estimatedTotalPages = 0;
-                      _invalidateCache();
-                      _cleanupRecognizers();
-                    });
-                  });
-                },
+                onChanged: (v) => setDialogState(() => temp = v),
               ),
             ],
           ),
         ),
         actions: [
           TextButton(
-              onPressed: () {
-                _fontSizeDebounce?.cancel();
-                Navigator.pop(ctx);
-              },
+              onPressed: () => Navigator.pop(ctx),
               child: const Text('Cancel')
           ),
           TextButton(
             onPressed: () {
-              _fontSizeDebounce?.cancel();
               setState(() {
                 _fontSize = temp;
                 _measuredTextHeight = null;
@@ -435,8 +411,18 @@ class _ReaderPageState extends State<ReaderPage> {
   @override
   Widget build(BuildContext context) {
     final mediaQuery = MediaQuery.of(context);
+    final screenHeight = mediaQuery.size.height;
     final topPadding = mediaQuery.padding.top;
-    const bottomInfoHeight = 36.0;
+    final bottomPadding = mediaQuery.padding.bottom;
+
+    const appBarHeight = kToolbarHeight;
+
+    const bottomInfoHeight = 32.0;
+
+    const verticalPadding = 16.0;
+
+    final totalUsedHeight = topPadding + appBarHeight + verticalPadding + bottomInfoHeight + verticalPadding + bottomPadding;
+    final availableTextHeight = screenHeight - totalUsedHeight;
 
     return Scaffold(
       body: GestureDetector(
@@ -445,24 +431,25 @@ class _ReaderPageState extends State<ReaderPage> {
         child: Stack(
           children: [
             Container(color: Colors.white),
+
             Padding(
               padding: EdgeInsets.only(
-                top: topPadding + 24.0 + 16.0,
+                top: topPadding + appBarHeight + verticalPadding,
                 left: _contentPadding.left,
                 right: _contentPadding.right,
-                bottom: _contentPadding.bottom,
+                bottom: bottomPadding + verticalPadding,
               ),
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Expanded(
+                  SizedBox(
+                    height: availableTextHeight,
                     child: LayoutBuilder(
                       builder: (context, constraints) {
-                        final availableHeight = constraints.maxHeight - bottomInfoHeight;
+                        final textHeight = constraints.maxHeight - bottomInfoHeight;
 
-                        if (_measuredTextHeight != availableHeight) {
+                        if (_measuredTextHeight != textHeight) {
                           WidgetsBinding.instance.addPostFrameCallback((_) {
-                            _loadPaginationWithMeasuredHeight(availableHeight);
+                            _loadPaginationWithMeasuredHeight(textHeight);
                           });
                         }
 
@@ -496,46 +483,49 @@ class _ReaderPageState extends State<ReaderPage> {
                           );
                         } else {
                           final pageIndex = _currentPageIndex.clamp(0, currentPages.length - 1);
-                          content = RepaintBoundary(
-                            key: ValueKey('page_$_currentSectionIndex-$pageIndex'),
-                            child: SingleChildScrollView(
-                              physics: const NeverScrollableScrollPhysics(),
-                              child: RichText(
-                                textAlign: TextAlign.justify,
-                                text: TextSpan(
-                                  style: TextStyle(
-                                    fontSize: _fontSize,
-                                    height: _lineHeight,
-                                    color: Colors.black,
-                                  ),
-                                  children: _buildTextSpans(currentPages[pageIndex]),
+                          content = Align(
+                            alignment: Alignment.topLeft,
+                            child: RichText(
+                              textAlign: TextAlign.justify,
+                              text: TextSpan(
+                                style: TextStyle(
+                                  fontSize: _fontSize,
+                                  height: _lineHeight,
+                                  color: Colors.black,
                                 ),
+                                children: _buildTextSpans(currentPages[pageIndex]),
                               ),
                             ),
                           );
                         }
 
                         return Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Expanded(child: content),
-                            const SizedBox(height: 16),
-                            Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                              children: [
-                                Text(
-                                  'Section ${_currentSectionIndex + 1}/${widget.book.sections.length}',
-                                  style: _pageInfoStyle,
-                                ),
-                                Text(
-                                  isPaginating && currentPageCount > 0
-                                      ? 'Page ${_currentPageIndex + 1}/$currentPageCount+ (loading...)'
-                                      : currentPages.isNotEmpty
-                                      ? 'Page ${_currentPageIndex + 1}/${currentPages.length}'
-                                      : 'Page ${_currentPageIndex + 1}/~$_estimatedTotalPages',
-                                  style: _pageInfoStyle,
-                                ),
-                              ],
+                            SizedBox(
+                              height: textHeight,
+                              child: content,
+                            ),
+
+                            SizedBox(
+                              height: bottomInfoHeight,
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                crossAxisAlignment: CrossAxisAlignment.center,
+                                children: [
+                                  Text(
+                                    'Section ${_currentSectionIndex + 1}/${widget.book.sections.length}',
+                                    style: _pageInfoStyle,
+                                  ),
+                                  Text(
+                                    isPaginating && currentPageCount > 0
+                                        ? 'Page ${_currentPageIndex + 1}/$currentPageCount+ (loading...)'
+                                        : currentPages.isNotEmpty
+                                        ? 'Page ${_currentPageIndex + 1}/${currentPages.length}'
+                                        : 'Page ${_currentPageIndex + 1}/~$_estimatedTotalPages',
+                                    style: _pageInfoStyle,
+                                  ),
+                                ],
+                              ),
                             ),
                           ],
                         );
@@ -545,12 +535,15 @@ class _ReaderPageState extends State<ReaderPage> {
                 ],
               ),
             ),
+
             // AppBar
             if (_showAppBar)
               Positioned(
-                top: 0, left: 0, right: 0,
+                top: 0,
+                left: 0,
+                right: 0,
                 child: Container(
-                  height: kToolbarHeight + topPadding,
+                  height: appBarHeight + topPadding,
                   color: Theme.of(context).colorScheme.inversePrimary,
                   child: AppBar(
                     title: Text(widget.book.title),

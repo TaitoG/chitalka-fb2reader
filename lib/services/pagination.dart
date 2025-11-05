@@ -1,5 +1,6 @@
 // services/pagination.dart
 import 'dart:async';
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:chitalka/models/book.dart';
 import 'package:chitalka/models/page_data.dart';
@@ -8,7 +9,6 @@ import 'package:chitalka/core/tokenizer.dart';
 
 class PaginationService extends ChangeNotifier {
   static const int MAX_CACHED_SECTIONS = 7;
-  static const int TOKENS_PER_YIELD = 50;
 
   final Map<int, List<PageData>> _sectionPages = {};
   final Map<int, Completer<void>> _paginationCompleters = {};
@@ -20,8 +20,6 @@ class PaginationService extends ChangeNotifier {
     textDirection: TextDirection.ltr,
     textAlign: TextAlign.justify,
   );
-
-  final Map<double, double> _avgCharWidthCache = {};
 
   void _touchSection(int sectionIndex) {
     _accessOrder.remove(sectionIndex);
@@ -35,22 +33,23 @@ class PaginationService extends ChangeNotifier {
     }
   }
 
-  double _measureAverageCharWidth(TextStyle textStyle) {
-    final fontSize = textStyle.fontSize ?? 14.0;
+  double _measureTextHeightWithLayout(
+      List<WordToken> tokens,
+      TextStyle textStyle,
+      double maxWidth,
+      ) {
+    if (tokens.isEmpty) return 0;
 
-    if (_avgCharWidthCache.containsKey(fontSize)) {
-      return _avgCharWidthCache[fontSize]!;
-    }
+    final spans = tokens.map((token) {
+      return TextSpan(text: token.text, style: textStyle);
+    }).toList();
 
-    const sampleText = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzАБВГДЕЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯабвгдежзийклмнопрстуфхцчшщъыьэюя';
     _textPainter
-      ..text = TextSpan(text: sampleText, style: textStyle)
-      ..layout();
+      ..text = TextSpan(children: spans, style: textStyle)
+      ..textAlign = TextAlign.justify
+      ..layout(maxWidth: maxWidth);
 
-    final avgWidth = _textPainter.width / sampleText.length;
-    _avgCharWidthCache[fontSize] = avgWidth;
-
-    return avgWidth;
+    return _textPainter.height;
   }
 
   Future<void> _paginateSectionIncremental({
@@ -62,100 +61,165 @@ class PaginationService extends ChangeNotifier {
     required double textContainerHeight,
   }) async {
     final section = book.sections[sectionIndex];
-    final padding = const EdgeInsets.all(24.0);
-    final availableHeight = textContainerHeight;
+    final padding = const EdgeInsets.symmetric(horizontal: 24.0);
     final availableWidth = screenSize.width - padding.horizontal;
+    final availableHeight = textContainerHeight;
     final textStyle = TextStyle(fontSize: fontSize, height: lineHeight);
 
-    final avgCharWidth = _measureAverageCharWidth(textStyle);
-    final charsPerLine = (availableWidth / avgCharWidth).floor();
-    final lineHeightPx = fontSize * lineHeight;
-    final linesPerPage = (availableHeight / lineHeightPx).floor();
-    final estimatedCharsPerPage = charsPerLine * linesPerPage;
-
     final allTokens = _tokenizeSectionSync(section.paragraphs);
-
-    List<PageData> pages = [];
-    List<WordToken> currentPageTokens = [];
-    int currentEstimatedChars = 0;
-    int tokensSinceYield = 0;
-
-    for (int tokenIndex = 0; tokenIndex < allTokens.length; tokenIndex++) {
-      final token = allTokens[tokenIndex];
-      currentPageTokens.add(token);
-      currentEstimatedChars += token.text.length;
-      tokensSinceYield++;
-
-      if (tokensSinceYield >= TOKENS_PER_YIELD) {
-        await Future.delayed(Duration.zero);
-        tokensSinceYield = 0;
-      }
-
-      if (currentEstimatedChars >= estimatedCharsPerPage * 0.85) {
-        final currentText = currentPageTokens.map((t) => t.text).join();
-        _textPainter
-          ..text = TextSpan(text: currentText, style: textStyle)
-          ..layout(maxWidth: availableWidth);
-
-        if (_textPainter.height > availableHeight) {
-          int left = 0;
-          int right = currentPageTokens.length - 1;
-          int bestFit = right;
-
-          while (left <= right) {
-            final mid = (left + right) ~/ 2;
-            final testText = currentPageTokens.sublist(0, mid + 1).map((t) => t.text).join();
-            _textPainter
-              ..text = TextSpan(text: testText, style: textStyle)
-              ..layout(maxWidth: availableWidth);
-
-            if (_textPainter.height <= availableHeight) {
-              bestFit = mid;
-              left = mid + 1;
-            } else {
-              right = mid - 1;
-            }
-          }
-
-          final pageTokens = currentPageTokens.sublist(0, bestFit + 1);
-          final remainingTokens = currentPageTokens.sublist(bestFit + 1);
-
-          final indentTokens = TextTokenizer.tokenize('\u200B' * 50);
-          pageTokens.addAll(indentTokens);
-
-          if (pageTokens.isNotEmpty) {
-            final page = PageData(
-              text: pageTokens.map((t) => t.text).join().trim(),
-              tokens: List.unmodifiable(pageTokens),
-            );
-            pages.add(page);
-
-            _sectionPages[sectionIndex] = List.from(pages);
-            notifyListeners();
-
-            await Future.delayed(Duration.zero);
-          }
-
-          currentPageTokens = remainingTokens;
-          currentEstimatedChars = remainingTokens.fold(0, (sum, t) => sum + t.text.length);
-        }
-      }
-    }
-
-    if (currentPageTokens.isNotEmpty) {
-      pages.add(PageData(
-        text: currentPageTokens.map((t) => t.text).join().trim(),
-        tokens: List.unmodifiable(currentPageTokens),
-      ));
-      _sectionPages[sectionIndex] = pages;
+    if (allTokens.isEmpty) {
+      _sectionPages[sectionIndex] = [];
       notifyListeners();
+      return;
     }
+
+    final estimatedTokensPerPage = _estimateTokensPerPage(
+      textStyle: textStyle,
+      availableWidth: availableWidth,
+      availableHeight: availableHeight,
+      sampleTokens: allTokens,
+    );
+
+    print('Estimated tokens per page: $estimatedTokensPerPage');
+
+    final List<PageData> finalPages = [];
+    int currentIndex = 0;
+
+    while (currentIndex < allTokens.length) {
+      await Future.delayed(Duration.zero);
+
+      final remainingTokens = allTokens.sublist(currentIndex);
+
+      final pageTokens = _fitTokensToPage(
+        tokens: remainingTokens,
+        textStyle: textStyle,
+        availableWidth: availableWidth,
+        availableHeight: availableHeight,
+        estimatedCount: estimatedTokensPerPage,
+      );
+
+      if (pageTokens.isEmpty) {
+        finalPages.add(_createPageData([remainingTokens.first]));
+        currentIndex++;
+      } else {
+        finalPages.add(_createPageData(pageTokens));
+        currentIndex += pageTokens.length;
+      }
+
+      if (finalPages.length % 3 == 0) {
+        _sectionPages[sectionIndex] = List.unmodifiable(finalPages);
+        notifyListeners();
+      }
+    }
+
+    _sectionPages[sectionIndex] = List.unmodifiable(finalPages);
+    notifyListeners();
+  }
+
+  List<WordToken> _fitTokensToPage({
+    required List<WordToken> tokens,
+    required TextStyle textStyle,
+    required double availableWidth,
+    required double availableHeight,
+    required int estimatedCount,
+  }) {
+    if (tokens.isEmpty) return [];
+
+    int left = 1;
+    int right = tokens.length;
+    int bestFit = 0;
+
+    while (left <= right) {
+      final mid = (left + right) ~/ 2;
+      final testTokens = tokens.sublist(0, mid);
+      final height = _measureTextHeightWithLayout(
+        testTokens,
+        textStyle,
+        availableWidth,
+      );
+
+      if (height <= availableHeight) {
+        bestFit = mid;
+        left = mid + 1;
+      } else {
+        right = mid - 1;
+      }
+    }
+
+    if (bestFit == 0) return [];
+
+    int finalCount = bestFit;
+    for (int i = bestFit + 1; i <= min(bestFit + 20, tokens.length); i++) {
+      final testTokens = tokens.sublist(0, i);
+      final height = _measureTextHeightWithLayout(
+        testTokens,
+        textStyle,
+        availableWidth,
+      );
+
+      if (height <= availableHeight) {
+        finalCount = i;
+      } else {
+        break;
+      }
+    }
+
+    return tokens.sublist(0, finalCount);
+  }
+
+  int _estimateTokensPerPage({
+    required TextStyle textStyle,
+    required double availableWidth,
+    required double availableHeight,
+    required List<WordToken> sampleTokens,
+  }) {
+    if (sampleTokens.isEmpty) return 150;
+
+    final sampleSize = min(800, sampleTokens.length);
+    final startIndex = max(0, (sampleTokens.length - sampleSize) ~/ 2);
+    final sample = sampleTokens.sublist(startIndex, startIndex + sampleSize);
+
+    final sampleHeight = _measureTextHeightWithLayout(
+      sample,
+      textStyle,
+      availableWidth,
+    );
+
+    if (sampleHeight <= 0) return 150;
+
+    final ratio = availableHeight / sampleHeight;
+    final estimated = (sample.length * ratio).floor();
+
+    return max(80, (estimated * 0.85).floor());
+  }
+
+  PageData _createPageData(List<WordToken> tokens) {
+    if (tokens.isEmpty) {
+      return PageData(text: '', tokens: List.unmodifiable([]));
+    }
+
+    final paddingTokens = List.generate(
+      100,
+          (i) => WordToken(text: '\u200B', word: '', startOffset: -1),
+    );
+
+    final finalTokens = [...tokens, ...paddingTokens];
+
+    return PageData(
+      text: finalTokens.map((t) => t.text).join(),
+      tokens: List.unmodifiable(finalTokens),
+    );
   }
 
   List<WordToken> _tokenizeSectionSync(List<String> paragraphs) {
     final tokens = <WordToken>[];
-    for (final p in paragraphs) {
-      tokens.addAll(TextTokenizer.tokenize(p + '\n   '));
+    for (int i = 0; i < paragraphs.length; i++) {
+      final p = paragraphs[i];
+      tokens.addAll(TextTokenizer.tokenize(p));
+
+      if (i < paragraphs.length - 1) {
+        tokens.addAll(TextTokenizer.tokenize('\n'));
+      }
     }
     return tokens;
   }
@@ -238,17 +302,16 @@ class PaginationService extends ChangeNotifier {
       for (final p in section.paragraphs) {
         totalChars += p.length;
       }
-      totalChars += 2;
     }
 
     final textStyle = TextStyle(fontSize: fontSize, height: lineHeight);
-    final avgCharWidth = _measureAverageCharWidth(textStyle);
-    final charsPerLine = (availableWidth / avgCharWidth).floor();
+
+    final charsPerLine = (availableWidth / (fontSize * 0.5)).floor();
     final lineHeightPx = fontSize * lineHeight;
     final linesPerPage = (availableHeight / lineHeightPx).floor();
     final charsPerPage = charsPerLine * linesPerPage;
 
-    final estimated = (totalChars / charsPerPage * 1.05).ceil();
+    final estimated = (totalChars / charsPerPage * 1.1).ceil();
     _estimationCache[key] = estimated;
     return estimated;
   }
@@ -259,7 +322,6 @@ class PaginationService extends ChangeNotifier {
     _paginatingNow.clear();
     _paginationCompleters.clear();
     _estimationCache.clear();
-    _avgCharWidthCache.clear();
   }
 
   @override
