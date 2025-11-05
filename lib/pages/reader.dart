@@ -1,77 +1,114 @@
-// reader.dart
-import 'dart:async';
+// pages/reader.dart
 import 'package:flutter/material.dart';
-import 'package:flutter/gestures.dart';
 import 'package:chitalka/models/book.dart';
-import 'package:chitalka/models/page_data.dart';
-import 'package:chitalka/services/pagination.dart';
+import 'package:chitalka/services/custom_renderer.dart';
 import 'package:chitalka/services/dictionary.dart';
 import 'package:chitalka/services/bookmark_service.dart';
 import 'package:chitalka/widgets/translation.dart';
-import 'package:chitalka/pages/bookmark_page.dart';
+import '../themes/provider.dart';
 
-class ReaderPage extends StatefulWidget {
+class RenderObjectReaderPage extends StatefulWidget {
   final Book book;
   final BookMetadata? metadata;
 
-  const ReaderPage({
+  const RenderObjectReaderPage({
     Key? key,
     required this.book,
-    this.metadata,
+    this.metadata
   }) : super(key: key);
 
   @override
-  State<ReaderPage> createState() => _ReaderPageState();
+  State<RenderObjectReaderPage> createState() => _RenderObjectReaderPageState();
 }
 
-class _ReaderPageState extends State<ReaderPage> {
-  // Constants
+class _RenderObjectReaderPageState extends State<RenderObjectReaderPage> {
   static const double _lineHeight = 1.4;
-  static const TextStyle _pageInfoStyle = TextStyle(color: Colors.grey, fontSize: 12);
+  static const double _defaultFontSize = 18.0;
   static const EdgeInsets _contentPadding = EdgeInsets.symmetric(horizontal: 24.0);
 
-  // UI State
-  int _currentSectionIndex = 0;
-  int _currentPageIndex = 0;
-  double _fontSize = 18.0;
-  bool _isInitialized = false;
-  String? _selectedWord;
-  int? _selectedWordIndex;
-  bool _showAppBar = true;
-
-  // Services
-  late final PaginationService _paginationService;
   late final DictionaryService _dictionaryService;
   late final BookmarkService _bookmarkService;
 
+  double _fontSize = _defaultFontSize;
+  bool _showAppBar = true;
+  double _scrollOffset = 0;
+
+  final List<int> _sectionOffsets = [];
+  final List<String> _sectionTitles = [];
+
+  int? _selectedWordOffset;
   Set<String> _bookmarkedWords = {};
-  List<InlineSpan>? _cachedTextSpans;
-  int? _cachedPageHash;
-  double? _measuredTextHeight;
 
-  int _estimatedTotalPages = 0;
-  Timer? _paginationDebounce;
+  late final String _fullText;
 
-  final Map<int, TapGestureRecognizer> _gestureRecognizers = {};
+  final GlobalKey _renderKey = GlobalKey();
 
   @override
   void initState() {
     super.initState();
 
-    if (widget.metadata?.lastPosition != null) {
-      _currentSectionIndex = widget.metadata!.lastPosition! ~/ 1000;
-      _currentPageIndex = widget.metadata!.lastPosition! % 1000;
-    }
-
-    _paginationService = PaginationService();
-    _paginationService.addListener(_onPaginationUpdate);
-
     _dictionaryService = DictionaryService();
     _bookmarkService = BookmarkService();
+
+    final buffer = StringBuffer();
+    int offset = 0;
+
+    for (final section in widget.book.sections) {
+      final headerText = '§${section.title}§\n';
+      buffer.write(headerText);
+      offset += headerText.length;
+
+      _sectionOffsets.add(offset - headerText.length);
+      _sectionTitles.add(section.title);
+
+      for (final para in section.paragraphs) {
+        buffer.write(para);
+        buffer.write('\n\n');
+        offset += para.length + 2;
+      }
+    }
+
+    _fullText = buffer.toString();
+    _loadBookmarkedWords();
+
+    if (widget.metadata?.lastPosition != null) {
+      _scrollOffset = widget.metadata!.lastPosition!.toDouble();
+    }
   }
 
-  void _onPaginationUpdate() {
-    if (mounted) setState(() {});
+  String _getCurrentSectionTitle() {
+    final renderObject = _renderObject;
+    if (renderObject == null) return widget.book.sections.first.title;
+
+    final visibleWord = _findFirstVisibleWord();
+    if (visibleWord == null) return widget.book.sections.first.title;
+
+    final wordOffset = visibleWord.documentOffset;
+
+    for (int i = _sectionOffsets.length - 1; i >= 0; i--) {
+      if (wordOffset >= _sectionOffsets[i]) {
+        return _sectionTitles[i];
+      }
+    }
+
+    return widget.book.sections.first.title;
+  }
+
+  LayoutWord? _findFirstVisibleWord() {
+    final renderObject = _renderObject;
+    if (renderObject == null) return null;
+
+    for (final line in renderObject.lines) {
+      final lineScreenY = line.y - _scrollOffset;
+
+      if (lineScreenY >= 0 && lineScreenY < renderObject.size.height) {
+        if (line.words.isNotEmpty) {
+          return line.words.first;
+        }
+      }
+    }
+
+    return null;
   }
 
   Future<void> _loadBookmarkedWords() async {
@@ -80,219 +117,90 @@ class _ReaderPageState extends State<ReaderPage> {
     if (mounted) {
       setState(() {
         _bookmarkedWords = bookmarks.map((b) => b.text.toLowerCase()).toSet();
-        _invalidateCache();
       });
-    }
-  }
-
-  void _invalidateCache() {
-    _cachedTextSpans = null;
-    _cachedPageHash = null;
-  }
-
-  void _cleanupRecognizers() {
-    for (final r in _gestureRecognizers.values) {
-      r.dispose();
-    }
-    _gestureRecognizers.clear();
-  }
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    if (!_isInitialized) {
-      _loadBookmarkedWords();
-      _isInitialized = true;
-    }
-  }
-
-  Future<void> _loadPaginationWithMeasuredHeight(double textHeight) async {
-    if (_measuredTextHeight == textHeight) return;
-
-    _paginationDebounce?.cancel();
-    _paginationDebounce = Timer(const Duration(milliseconds: 50), () async {
-      _measuredTextHeight = textHeight;
-
-      final size = MediaQuery.of(context).size;
-
-      // Запускаем пагинацию текущей секции
-      _paginationService.paginateSection(
-        book: widget.book,
-        sectionIndex: _currentSectionIndex,
-        fontSize: _fontSize,
-        lineHeight: _lineHeight,
-        screenSize: size,
-        textContainerHeight: textHeight,
-      );
-
-      // Предзагружаем соседние секции
-      _preloadAdjacentSections(size, textHeight);
-
-      // Оцениваем общее количество страниц
-      if (_estimatedTotalPages == 0) {
-        final estimated = await _paginationService.estimateTotalPages(
-          book: widget.book,
-          fontSize: _fontSize,
-          lineHeight: _lineHeight,
-          availableWidth: size.width - _contentPadding.horizontal,
-          availableHeight: textHeight,
-        );
-        if (mounted) {
-          setState(() => _estimatedTotalPages = estimated);
-        }
-      }
-    });
-  }
-
-  void _preloadAdjacentSections(Size size, double textHeight) {
-    for (int i = 1; i <= 2; i++) {
-      if (_currentSectionIndex - i >= 0) {
-        _paginationService.paginateSection(
-          book: widget.book,
-          sectionIndex: _currentSectionIndex - i,
-          fontSize: _fontSize,
-          lineHeight: _lineHeight,
-          screenSize: size,
-          textContainerHeight: textHeight,
-        ).catchError((e) => print('Preload error: $e'));
-      }
-      if (_currentSectionIndex + i < widget.book.sections.length) {
-        _paginationService.paginateSection(
-          book: widget.book,
-          sectionIndex: _currentSectionIndex + i,
-          fontSize: _fontSize,
-          lineHeight: _lineHeight,
-          screenSize: size,
-          textContainerHeight: textHeight,
-        ).catchError((e) => print('Preload error: $e'));
-      }
     }
   }
 
   @override
   void dispose() {
     _savePosition();
-    _paginationService.removeListener(_onPaginationUpdate);
-    _paginationService.dispose();
-    _paginationDebounce?.cancel();
-    _cleanupRecognizers();
     super.dispose();
   }
 
   Future<void> _savePosition() async {
     if (widget.metadata != null) {
-      widget.metadata!.lastPosition = _currentSectionIndex * 1000 + _currentPageIndex;
+      widget.metadata!.lastPosition = _scrollOffset.round();
       await widget.metadata!.save();
     }
   }
 
-  BookSection get _currentSection => widget.book.sections[_currentSectionIndex];
-  List<PageData> get _currentPages => _paginationService.getSectionPages(_currentSectionIndex);
+  RenderCustomText? get _renderObject {
+    final context = _renderKey.currentContext;
+    if (context == null) return null;
+    return context.findRenderObject() as RenderCustomText?;
+  }
 
-  bool get _hasNextPage =>
-      _currentPageIndex < _currentPages.length - 1 ||
-          _currentSectionIndex < widget.book.sections.length - 1;
-  bool get _hasPrevPage => _currentPageIndex > 0 || _currentSectionIndex > 0;
+  void _handleTap(TapUpDetails details, double viewportHeight) {
+    final width = MediaQuery.of(context).size.width;
+    final x = details.globalPosition.dx;
 
-  Future<void> _nextPage() async {
-    final currentPages = _currentPages;
+    final renderBox = _renderKey.currentContext?.findRenderObject() as RenderBox?;
+    final renderObject = _renderObject;
 
-    if (_currentPageIndex < currentPages.length - 1) {
-      setState(() {
-        _currentPageIndex++;
-        _resetSelectionState();
-      });
-    } else if (_currentSectionIndex < widget.book.sections.length - 1) {
-      final nextSectionIndex = _currentSectionIndex + 1;
+    if (renderBox != null && renderObject != null) {
+      final localPos = renderBox.globalToLocal(details.globalPosition);
 
-      setState(() {
-        _currentSectionIndex = nextSectionIndex;
-        _currentPageIndex = 0;
-        _resetSelectionState();
-      });
+      if (localPos.dx >= 0 && localPos.dx <= renderBox.size.width &&
+          localPos.dy >= 0 && localPos.dy <= renderBox.size.height) {
 
-      if (_measuredTextHeight != null && !_paginationService.isSectionReady(nextSectionIndex)) {
-        final size = MediaQuery.of(context).size;
-        _paginationService.paginateSection(
-          book: widget.book,
-          sectionIndex: nextSectionIndex,
-          fontSize: _fontSize,
-          lineHeight: _lineHeight,
-          screenSize: size,
-          textContainerHeight: _measuredTextHeight!,
-        );
-        _preloadAdjacentSections(size, _measuredTextHeight!);
+        final word = renderObject.findWordAt(localPos);
+
+        if (word != null && word.cleanWord.isNotEmpty) {
+          setState(() {
+            if (_selectedWordOffset == word.documentOffset) {
+              _selectedWordOffset = null;
+            } else {
+              _selectedWordOffset = word.documentOffset;
+              _showTranslation(word.cleanWord);
+            }
+          });
+          return;
+        }
       }
     }
-    _savePosition();
-  }
 
-  Future<void> _prevPage() async {
-    if (_currentPageIndex > 0) {
-      setState(() {
-        _currentPageIndex--;
-        _resetSelectionState();
-      });
-    } else if (_currentSectionIndex > 0) {
-      final prevSectionIndex = _currentSectionIndex - 1;
-
-      if (_measuredTextHeight != null && !_paginationService.isSectionReady(prevSectionIndex)) {
-        final size = MediaQuery.of(context).size;
-        _paginationService.paginateSection(
-          book: widget.book,
-          sectionIndex: prevSectionIndex,
-          fontSize: _fontSize,
-          lineHeight: _lineHeight,
-          screenSize: size,
-          textContainerHeight: _measuredTextHeight!,
-        );
-      }
-
-      await Future.delayed(const Duration(milliseconds: 100));
-
-      final pages = _paginationService.getSectionPages(prevSectionIndex);
-
-      setState(() {
-        _currentSectionIndex = prevSectionIndex;
-        _currentPageIndex = pages.isEmpty ? 0 : pages.length - 1;
-        _resetSelectionState();
-      });
-
-      if (_measuredTextHeight != null) {
-        final size = MediaQuery.of(context).size;
-        _preloadAdjacentSections(size, _measuredTextHeight!);
-      }
+    if (_selectedWordOffset != null) {
+      setState(() => _selectedWordOffset = null);
+      return;
     }
-    _savePosition();
+
+    if (x < width * 0.3) {
+      final newOffset = _getSmartScrollOffset(renderObject, viewportHeight, forward: false);
+      setState(() {
+        _scrollOffset = newOffset.clamp(0.0, double.infinity);
+      });
+      _savePosition();
+    } else if (x > width * 0.7) {
+      final newOffset = _getSmartScrollOffset(renderObject, viewportHeight, forward: true);
+      setState(() {
+        _scrollOffset = newOffset.clamp(0.0, double.infinity);
+      });
+      _savePosition();
+    } else {
+      setState(() => _showAppBar = !_showAppBar);
+    }
   }
 
-  void _resetSelectionState() {
-    _selectedWord = null;
-    _selectedWordIndex = null;
-    _invalidateCache();
-  }
+  double _getSmartScrollOffset(RenderCustomText? renderObject, double viewportHeight, {required bool forward}) {
+    if (renderObject == null) {
+      return forward ? (_scrollOffset + viewportHeight) : (_scrollOffset - viewportHeight);
+    }
 
-  void _resetSelection() {
-    setState(() {
-      _resetSelectionState();
-    });
-  }
-
-  void _onWordTap(String word, int index) {
-    setState(() {
-      if (_selectedWordIndex == index) {
-        _resetSelectionState();
-      } else {
-        _selectedWord = word;
-        _selectedWordIndex = index;
-        _invalidateCache();
-      }
-    });
-    if (_selectedWord != null) _showTranslation(word);
+    return renderObject.getAlignedScrollOffset(_scrollOffset, viewportHeight, forward: forward);
   }
 
   void _showTranslation(String word) {
-    final clean = word.replaceAll(RegExp(r'[^\wа-яА-ЯёЁ]'), '').toLowerCase();
+    final clean = word.toLowerCase();
     if (clean.isEmpty) return;
 
     TranslationBottomSheet.show(
@@ -302,67 +210,9 @@ class _ReaderPageState extends State<ReaderPage> {
       bookmarkService: _bookmarkService,
       bookId: widget.metadata?.filePath ?? widget.book.title,
       onBookmarkPressed: _loadBookmarkedWords,
-    ).then((_) => _resetSelection());
-  }
-
-  void _handleTap(TapUpDetails details) {
-    final width = MediaQuery.of(context).size.width;
-    final x = details.globalPosition.dx;
-
-    if (_selectedWordIndex != null) {
-      _resetSelection();
-      return;
-    }
-
-    if (x < width * 0.3 && _hasPrevPage) {
-      _prevPage();
-    } else if (x > width * 0.7 && _hasNextPage) {
-      _nextPage();
-    } else {
-      setState(() => _showAppBar = !_showAppBar);
-    }
-  }
-
-  List<InlineSpan> _buildTextSpans(PageData page) {
-    final hash = Object.hash(
-        _currentSectionIndex,
-        _currentPageIndex,
-        _selectedWordIndex,
-        _bookmarkedWords.length
-    );
-
-    if (_cachedTextSpans != null && _cachedPageHash == hash) {
-      return _cachedTextSpans!;
-    }
-
-    final spans = <InlineSpan>[];
-    final tokens = page.tokens;
-
-    for (int i = 0; i < tokens.length; i++) {
-      final token = tokens[i];
-      final isSelected = _selectedWordIndex == i;
-      final isBookmarked = _bookmarkedWords.contains(token.word.toLowerCase());
-
-      final recognizer = _gestureRecognizers.putIfAbsent(
-          i,
-              () => TapGestureRecognizer()
-      )..onTap = () => _onWordTap(token.word, i);
-
-      spans.add(TextSpan(
-        text: token.text,
-        style: TextStyle(
-          backgroundColor: isSelected ? Colors.yellow.withOpacity(0.5) : null,
-          decoration: isBookmarked ? TextDecoration.underline : null,
-          decorationColor: isBookmarked ? Colors.blue.withOpacity(0.5) : null,
-          decorationStyle: isBookmarked ? TextDecorationStyle.dotted : null,
-        ),
-        recognizer: recognizer,
-      ));
-    }
-
-    _cachedTextSpans = spans;
-    _cachedPageHash = hash;
-    return spans;
+    ).then((_) {
+      setState(() => _selectedWordOffset = null);
+    });
   }
 
   void _showFontSizeDialog() {
@@ -386,24 +236,63 @@ class _ReaderPageState extends State<ReaderPage> {
         ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('Cancel')
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
           ),
           TextButton(
             onPressed: () {
               setState(() {
                 _fontSize = temp;
-                _measuredTextHeight = null;
-                _paginationService.clear();
-                _estimatedTotalPages = 0;
-                _invalidateCache();
-                _cleanupRecognizers();
               });
               Navigator.pop(ctx);
             },
             child: const Text('OK'),
           ),
         ],
+      ),
+    );
+  }
+
+  void _showThemeDialog() {
+    final currentTheme = ThemeProvider.of(context)?.currentTheme ?? 'dark';
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Choose theme'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _buildThemeOption('light', 'Light', Icons.light_mode,
+                Colors.white, Colors.black, currentTheme == 'light'),
+            const SizedBox(height: 8),
+            _buildThemeOption('dark', 'Dark', Icons.dark_mode,
+                const Color(0xFF1A1A1A), const Color(0xFFE0E0E0), currentTheme == 'dark'),
+            const SizedBox(height: 8),
+            _buildThemeOption('sepia', 'Sepia', Icons.menu_book,
+                const Color(0xFFF5E6CC), const Color(0xFF5C4033), currentTheme == 'sepia'),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildThemeOption(String themeKey, String label, IconData icon,
+      Color bgColor, Color textColor, bool isSelected) {
+    return Container(
+      decoration: BoxDecoration(
+        color: bgColor,
+        borderRadius: BorderRadius.circular(8),
+        border: isSelected ? Border.all(color: Colors.blue, width: 2) : null,
+      ),
+      child: ListTile(
+        leading: Icon(icon, color: textColor),
+        title: Text(label, style: TextStyle(color: textColor)),
+        trailing: isSelected ? Icon(Icons.check, color: textColor) : null,
+        onTap: () {
+          ThemeProvider.of(context)?.changeTheme(themeKey);
+          Navigator.pop(context);
+        },
       ),
     );
   }
@@ -416,127 +305,76 @@ class _ReaderPageState extends State<ReaderPage> {
     final bottomPadding = mediaQuery.padding.bottom;
 
     const appBarHeight = kToolbarHeight;
-
     const bottomInfoHeight = 32.0;
-
     const verticalPadding = 16.0;
 
-    final totalUsedHeight = topPadding + appBarHeight + verticalPadding + bottomInfoHeight + verticalPadding + bottomPadding;
+    final totalUsedHeight = topPadding + appBarHeight +
+        verticalPadding + bottomInfoHeight +
+        verticalPadding + bottomPadding;
     final availableTextHeight = screenHeight - totalUsedHeight;
+
+    final renderObject = _renderObject;
+    final totalHeight = renderObject?.totalHeight ?? 0;
+
+    // ← Получаем цвет текста из текущей темы
+    final textColor = Theme.of(context).textTheme.bodyMedium?.color ?? Colors.black;
 
     return Scaffold(
       body: GestureDetector(
-        behavior: HitTestBehavior.translucent,
-        onTapUp: _handleTap,
+        behavior: HitTestBehavior.opaque,
+        onTapUp: (details) => _handleTap(details, availableTextHeight),
         child: Stack(
           children: [
-            Container(color: Colors.white),
-
-            Padding(
-              padding: EdgeInsets.only(
-                top: topPadding + appBarHeight + verticalPadding,
-                left: _contentPadding.left,
-                right: _contentPadding.right,
-                bottom: bottomPadding + verticalPadding,
+            Positioned(
+              top: topPadding + appBarHeight + verticalPadding,
+              left: _contentPadding.left,
+              right: _contentPadding.right,
+              bottom: bottomPadding + verticalPadding + bottomInfoHeight,
+              child: ClipRect(
+                child: CustomTextWidget(
+                  key: _renderKey,
+                  text: _fullText,
+                  textStyle: TextStyle(
+                    fontSize: _fontSize,
+                    height: _lineHeight,
+                    color: textColor, // ← Передаём цвет текста
+                  ),
+                  scrollOffset: _scrollOffset,
+                  selectedWordOffset: _selectedWordOffset,
+                  bookmarkedWords: _bookmarkedWords,
+                  textAlign: TextAlign.justify,
+                  viewportHeight: availableTextHeight,
+                ),
               ),
-              child: Column(
+            ),
+            Positioned(
+              left: _contentPadding.left,
+              right: _contentPadding.right,
+              bottom: bottomPadding + verticalPadding,
+              height: bottomInfoHeight,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                crossAxisAlignment: CrossAxisAlignment.baseline,
+                textBaseline: TextBaseline.alphabetic,
                 children: [
-                  SizedBox(
-                    height: availableTextHeight,
-                    child: LayoutBuilder(
-                      builder: (context, constraints) {
-                        final textHeight = constraints.maxHeight - bottomInfoHeight;
-
-                        if (_measuredTextHeight != textHeight) {
-                          WidgetsBinding.instance.addPostFrameCallback((_) {
-                            _loadPaginationWithMeasuredHeight(textHeight);
-                          });
-                        }
-
-                        final currentPages = _currentPages;
-                        final isPaginating = _paginationService.isSectionPaginating(_currentSectionIndex);
-                        final currentPageCount = _paginationService.getSectionPageCount(_currentSectionIndex);
-
-                        Widget content;
-
-                        if (currentPages.isEmpty && isPaginating) {
-                          content = const Center(
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                CircularProgressIndicator(),
-                                SizedBox(height: 16),
-                                Text('Loading pages...', style: TextStyle(color: Colors.grey)),
-                              ],
-                            ),
-                          );
-                        } else if (currentPages.isEmpty) {
-                          content = SingleChildScrollView(
-                            child: Text(
-                              _currentSection.paragraphs.join('\n\n'),
-                              style: TextStyle(
-                                fontSize: _fontSize,
-                                height: _lineHeight,
-                                color: Colors.black,
-                              ),
-                            ),
-                          );
-                        } else {
-                          final pageIndex = _currentPageIndex.clamp(0, currentPages.length - 1);
-                          content = Align(
-                            alignment: Alignment.topLeft,
-                            child: RichText(
-                              textAlign: TextAlign.justify,
-                              text: TextSpan(
-                                style: TextStyle(
-                                  fontSize: _fontSize,
-                                  height: _lineHeight,
-                                  color: Colors.black,
-                                ),
-                                children: _buildTextSpans(currentPages[pageIndex]),
-                              ),
-                            ),
-                          );
-                        }
-
-                        return Column(
-                          children: [
-                            SizedBox(
-                              height: textHeight,
-                              child: content,
-                            ),
-
-                            SizedBox(
-                              height: bottomInfoHeight,
-                              child: Row(
-                                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                                crossAxisAlignment: CrossAxisAlignment.center,
-                                children: [
-                                  Text(
-                                    'Section ${_currentSectionIndex + 1}/${widget.book.sections.length}',
-                                    style: _pageInfoStyle,
-                                  ),
-                                  Text(
-                                    isPaginating && currentPageCount > 0
-                                        ? 'Page ${_currentPageIndex + 1}/$currentPageCount+ (loading...)'
-                                        : currentPages.isNotEmpty
-                                        ? 'Page ${_currentPageIndex + 1}/${currentPages.length}'
-                                        : 'Page ${_currentPageIndex + 1}/~$_estimatedTotalPages',
-                                    style: _pageInfoStyle,
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        );
-                      },
+                  Expanded(
+                    child: Text(
+                      _getCurrentSectionTitle(),
+                      style: const TextStyle(color: Colors.grey, fontSize: 12, height: 1.0),
+                      overflow: TextOverflow.ellipsis,
                     ),
+                  ),
+                  SizedBox(width: 8),
+                  Text(
+                    totalHeight > 0
+                        ? '${(_scrollOffset / totalHeight * 100).clamp(0, 100).toStringAsFixed(1)}%'
+                        : '0%',
+                    style: const TextStyle(color: Colors.grey, fontSize: 12, height: 1.0),
                   ),
                 ],
               ),
             ),
 
-            // AppBar
             if (_showAppBar)
               Positioned(
                 top: 0,
@@ -544,12 +382,14 @@ class _ReaderPageState extends State<ReaderPage> {
                 right: 0,
                 child: Container(
                   height: appBarHeight + topPadding,
-                  color: Theme.of(context).colorScheme.inversePrimary,
                   child: AppBar(
                     title: Text(widget.book.title),
-                    backgroundColor: Colors.transparent,
                     elevation: 0,
                     actions: [
+                      IconButton(
+                        icon: const Icon(Icons.palette),
+                        onPressed: _showThemeDialog,
+                      ),
                       IconButton(
                         icon: const Icon(Icons.text_fields),
                         tooltip: 'Font size',
@@ -558,12 +398,6 @@ class _ReaderPageState extends State<ReaderPage> {
                       IconButton(
                         icon: const Icon(Icons.bookmarks),
                         onPressed: () async {
-                          await Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (_) => BookmarksPage(bookmarkService: _bookmarkService),
-                            ),
-                          );
                           await _loadBookmarkedWords();
                         },
                       ),

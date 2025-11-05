@@ -114,8 +114,6 @@ class _BookmarksPageState extends State<BookmarksPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        backgroundColor: Colors.deepPurple,
-        foregroundColor: Colors.white,
         title: const Text('Bookmarks'),
       ),
       body: Column(
@@ -161,7 +159,6 @@ class _BookmarksPageState extends State<BookmarksPage> {
                   Icon(
                     Icons.bookmark_border,
                     size: 64,
-                    color: Colors.grey[400],
                   ),
                   const SizedBox(height: 16),
                   Text(
@@ -170,7 +167,6 @@ class _BookmarksPageState extends State<BookmarksPage> {
                         : 'No bookmarks found',
                     style: TextStyle(
                       fontSize: 16,
-                      color: Colors.grey[600],
                     ),
                   ),
                 ],
@@ -225,7 +221,6 @@ class _BookmarkCard extends StatelessWidget {
                       bookmark.bookTitle,
                       style: TextStyle(
                         fontSize: 12,
-                        color: Colors.grey[600],
                       ),
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -255,7 +250,6 @@ class _BookmarkCard extends StatelessWidget {
                   bookmark.translation!,
                   style: TextStyle(
                     fontSize: 14,
-                    color: Colors.grey[700],
                     fontStyle: FontStyle.italic,
                   ),
                 ),
@@ -266,7 +260,6 @@ class _BookmarkCard extends StatelessWidget {
                 Container(
                   padding: const EdgeInsets.all(8),
                   decoration: BoxDecoration(
-                    color: Colors.grey[100],
                     borderRadius: BorderRadius.circular(6),
                   ),
                   child: Text(
@@ -288,14 +281,12 @@ class _BookmarkCard extends StatelessWidget {
                         vertical: 4,
                       ),
                       decoration: BoxDecoration(
-                        color: Colors.purple[100],
                         borderRadius: BorderRadius.circular(12),
                       ),
                       child: Text(
                         tag,
                         style: TextStyle(
                           fontSize: 11,
-                          color: Colors.purple[900],
                         ),
                       ),
                     );
@@ -306,19 +297,19 @@ class _BookmarkCard extends StatelessWidget {
               const SizedBox(height: 8),
               Row(
                 children: [
-                  Icon(Icons.calendar_today, size: 12, color: Colors.grey[500]),
+                  Icon(Icons.calendar_today, size: 12,),
                   const SizedBox(width: 4),
                   Text(
                     _formatDate(bookmark.createdAt),
-                    style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                    style: TextStyle(fontSize: 11,),
                   ),
                   if (bookmark.reviewCount > 0) ...[
                     const SizedBox(width: 16),
-                    Icon(Icons.repeat, size: 12, color: Colors.grey[500]),
+                    Icon(Icons.repeat, size: 12,),
                     const SizedBox(width: 4),
                     Text(
                       '${bookmark.reviewCount}',
-                      style: TextStyle(fontSize: 11, color: Colors.grey[600]),
+                      style: TextStyle(fontSize: 11,),
                     ),
                   ],
                 ],

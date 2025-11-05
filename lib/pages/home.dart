@@ -10,7 +10,6 @@ import 'package:charset_converter/charset_converter.dart';
 import '../core/fb2.dart';
 import '../models/book.dart';
 import 'reader.dart';
-import 'custom_reader.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({Key? key}) : super(key: key);
@@ -68,7 +67,10 @@ class _HomePageState extends State<HomePage> {
       await Navigator.push(
         context,
         MaterialPageRoute(
-          builder: (_) => RenderObjectReaderPage(book: book, metadata: metadata),
+          builder: (_) => RenderObjectReaderPage(
+              book: book,
+              metadata: metadata,
+              ),
         ),
       );
     } catch (e) {
@@ -229,13 +231,13 @@ class _HomePageState extends State<HomePage> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const Icon(Icons.menu_book, size: 32, color: Colors.white),
+            const Icon(Icons.menu_book, size: 32,),
             const SizedBox(height: 8),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 8),
               child: Text(
                 book.title.split(' ').take(2).join('\n'),
-                style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white),
+                style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold,),
                 textAlign: TextAlign.center,
                 maxLines: 3,
                 overflow: TextOverflow.ellipsis,
@@ -261,8 +263,6 @@ class _HomePageState extends State<HomePage> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Chitalka'),
-        backgroundColor: Colors.deepPurple,
-        foregroundColor: Colors.white,
         elevation: 2,
         actions: [
           if (_booksBox.isNotEmpty)
@@ -285,16 +285,16 @@ class _HomePageState extends State<HomePage> {
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Icon(Icons.menu_book, size: 80, color: Colors.grey[400]),
+                      Icon(Icons.menu_book, size: 80,),
                       const SizedBox(height: 20),
                       Text(
                         _searchQuery.isEmpty ? 'No books' : 'Not found',
-                        style: TextStyle(fontSize: 18, color: Colors.grey[600]),
+                        style: TextStyle(fontSize: 18,),
                       ),
                       if (_searchQuery.isEmpty)
                         const Padding(
                           padding: EdgeInsets.only(top: 10),
-                          child: Text('Tap + to add', style: TextStyle(fontSize: 14, color: Colors.grey)),
+                          child: Text('Tap + to add', style: TextStyle(fontSize: 14,)),
                         ),
                     ],
                   ),
@@ -330,9 +330,9 @@ class _HomePageState extends State<HomePage> {
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    Text(book.author.join(', '), style: TextStyle(fontSize: 11, color: Colors.grey[600]), maxLines: 1, overflow: TextOverflow.ellipsis),
+                                    Text(book.author.join(', '), style: TextStyle(fontSize: 11,), maxLines: 1, overflow: TextOverflow.ellipsis),
                                     const SizedBox(height: 2),
-                                    Text('Read ${_formatDate(book.lastRead ?? book.addedDate)}', style: TextStyle(fontSize: 9, color: Colors.grey[500])),
+                                    Text('Read ${_formatDate(book.lastRead ?? book.addedDate)}', style: TextStyle(fontSize: 9,)),
                                   ],
                                 ),
                               ),
@@ -361,7 +361,6 @@ class _HomePageState extends State<HomePage> {
 
           if (_isLoading)
             Container(
-              color: Colors.black54,
               child: Center(
                 child: Card(
                   margin: const EdgeInsets.all(40),
@@ -383,8 +382,7 @@ class _HomePageState extends State<HomePage> {
       ),
       floatingActionButton: FloatingActionButton(
         onPressed: _pickAndAddBook,
-        backgroundColor: Colors.deepPurple,
-        child: const Icon(Icons.add, color: Colors.white),
+        child: const Icon(Icons.add),
       ),
     );
   }

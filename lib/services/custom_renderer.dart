@@ -1,6 +1,7 @@
 // services/custom_renderer.dart
 import 'package:flutter/material.dart';
 import 'dart:math';
+import 'theme_service.dart';
 
 class LayoutWord {
   final String text;
@@ -40,6 +41,14 @@ class RenderCustomText extends RenderBox {
   double _scrollOffset;
   int? _selectedWordOffset;
   Set<String> _bookmarkedWords;
+
+  AppTheme _theme = AppTheme.light;
+  AppTheme get theme => _theme;
+  set theme(AppTheme value) {
+    if (_theme == value) return;
+    _theme = value;
+    markNeedsPaint();
+  }
 
   List<LayoutLine> _lines = [];
   List<LayoutLine> get lines => _lines;
@@ -466,8 +475,8 @@ class RenderCustomText extends RenderBox {
     final canvas = context.canvas;
     canvas.clipRect(offset & size);
 
-    final highlightPaint = Paint()..color = Colors.yellow.withOpacity(0.5);
-    final headerBgPaint = Paint()..color = Colors.white.withOpacity(0.08);
+    final highlightPaint = Paint()..color = ThemeService.getHighlightColor(_theme);
+    final headerBgPaint = Paint()..color = ThemeService.getHeaderBgColor(_theme);
 
     for (final line in _lines) {
       final lineScreenY = line.y - _scrollOffset;

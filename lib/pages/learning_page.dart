@@ -105,7 +105,6 @@ class _LearningPageState extends State<LearningPage> {
           currentBookmark.bookTitle,
           style: const TextStyle(
             fontSize: 14,
-            color: Colors.grey,
             fontStyle: FontStyle.italic,
           ),
           textAlign: TextAlign.center,
@@ -132,7 +131,6 @@ class _LearningPageState extends State<LearningPage> {
                     'Translation:',
                     style: TextStyle(
                       fontSize: 16,
-                      color: Colors.grey,
                     ),
                   ),
                   const SizedBox(height: 10),
@@ -153,7 +151,6 @@ class _LearningPageState extends State<LearningPage> {
                         'Context: ${currentBookmark.context}',
                         style: const TextStyle(
                           fontSize: 14,
-                          color: Colors.grey,
                           fontStyle: FontStyle.italic,
                         ),
                         textAlign: TextAlign.center,
@@ -167,7 +164,6 @@ class _LearningPageState extends State<LearningPage> {
                         'Notes: ${currentBookmark.notes}',
                         style: const TextStyle(
                           fontSize: 14,
-                          color: Colors.blueGrey,
                         ),
                         textAlign: TextAlign.center,
                       ),
@@ -195,14 +191,12 @@ class _LearningPageState extends State<LearningPage> {
               const Icon(
                 Icons.visibility_off,
                 size: 40,
-                color: Colors.grey,
               ),
               const SizedBox(height: 10),
               Text(
                 'Tap to reveal translation',
                 style: TextStyle(
                   fontSize: 16,
-                  color: Colors.grey[600],
                   fontStyle: FontStyle.italic,
                 ),
               ),
@@ -217,8 +211,6 @@ class _LearningPageState extends State<LearningPage> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Learning'),
-        backgroundColor: Colors.deepPurple,
-        foregroundColor: Colors.white,
         actions: [
           if (_flashcards.isNotEmpty)
             IconButton(
@@ -235,16 +227,16 @@ class _LearningPageState extends State<LearningPage> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.school, size: 80, color: Colors.grey),
+            Icon(Icons.school, size: 80,),
             SizedBox(height: 20),
             Text(
               'No flashcards available',
-              style: TextStyle(fontSize: 18, color: Colors.grey),
+              style: TextStyle(fontSize: 18,),
             ),
             SizedBox(height: 10),
             Text(
               'Add some word bookmarks to start learning',
-              style: TextStyle(fontSize: 14, color: Colors.grey),
+              style: TextStyle(fontSize: 14,),
               textAlign: TextAlign.center,
             ),
           ],
@@ -256,8 +248,6 @@ class _LearningPageState extends State<LearningPage> {
           children: [
             LinearProgressIndicator(
               value: _flashcards.isEmpty ? 0 : (_currentCardIndex + 1) / _flashcards.length,
-              backgroundColor: Colors.grey[300],
-              color: Colors.deepPurple,
             ),
             const SizedBox(height: 16),
 
@@ -269,14 +259,12 @@ class _LearningPageState extends State<LearningPage> {
                   '${_currentCardIndex + 1} / ${_flashcards.length}',
                   style: const TextStyle(
                     fontSize: 14,
-                    color: Colors.grey,
                   ),
                 ),
                 Text(
                   'Reviews: ${_flashcards[_currentCardIndex].reviewCount}',
                   style: const TextStyle(
                     fontSize: 12,
-                    color: Colors.grey,
                   ),
                 ),
               ],

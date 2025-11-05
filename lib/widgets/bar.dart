@@ -6,7 +6,9 @@ import 'package:chitalka/pages/learning_page.dart';
 import 'package:chitalka/services/bookmark_service.dart';
 
 class MainNavigationPage extends StatefulWidget {
-  const MainNavigationPage({super.key});
+  const MainNavigationPage({
+    super.key,
+  });
 
   @override
   State<MainNavigationPage> createState() => _MainNavigationPageState();
