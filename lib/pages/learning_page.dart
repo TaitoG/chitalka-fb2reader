@@ -1,6 +1,5 @@
 // learning_page.dart
 import 'package:flutter/material.dart';
-import 'package:hive_flutter/hive_flutter.dart';
 import '../models/bookmark.dart';
 import '../services/bookmark_service.dart';
 
@@ -13,7 +12,6 @@ class LearningPage extends StatefulWidget {
 
 class _LearningPageState extends State<LearningPage> {
   final BookmarkService _bookmarkService = BookmarkService();
-  late Box<Bookmark> _bookmarksBox;
 
   List<Bookmark> _flashcards = [];
   int _currentCardIndex = 0;
@@ -23,7 +21,6 @@ class _LearningPageState extends State<LearningPage> {
   @override
   void initState() {
     super.initState();
-    _bookmarksBox = Hive.box<Bookmark>('bookmarks');
     _loadFlashcards();
   }
 

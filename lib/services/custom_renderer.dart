@@ -65,12 +65,11 @@ class RenderCustomText extends RenderBox {
   set scrollOffset(double value) {
     if (_scrollOffset == value) return;
 
-    final lineHeight = _textStyle.fontSize! * (_textStyle.height ?? 1.4); // для буфера
-    final maxScroll = max(0.0, totalHeight - size.height + lineHeight); // + height для переноса последней строки
+    final lineHeight = _textStyle.fontSize! * (_textStyle.height ?? 1.4);
+    final maxScroll = max(0.0, totalHeight - size.height + lineHeight);
 
     var clamped = value.clamp(0.0, maxScroll);
 
-    // Выравниваем по ближайшей строке, чтобы последняя влезла целиком
     LayoutLine? nearestLine;
     double minDiff = double.infinity;
     for (final line in _lines) {
@@ -83,7 +82,7 @@ class RenderCustomText extends RenderBox {
     }
 
     if (nearestLine != null) {
-      clamped = nearestLine.y; // Выравниваем скролл по началу строки
+      clamped = nearestLine.y;
     }
 
     final needsMoreLayout = _needsLayoutForScroll(clamped);
@@ -122,7 +121,7 @@ class RenderCustomText extends RenderBox {
 
     for (final line in _lines) {
       final delta = (line.y - targetY).abs();
-      if (delta < bestDelta && line.y + line.height <= totalHeight) { // Учёт height для влезания
+      if (delta < bestDelta && line.y + line.height <= totalHeight) {
         bestDelta = delta;
         bestLine = line;
       }
@@ -130,7 +129,7 @@ class RenderCustomText extends RenderBox {
 
     if (bestLine == null) return currentOffset;
 
-    return bestLine.y.clamp(0.0, max(0.0, totalHeight - viewportHeight + lineHeight)); // + height для переноса
+    return bestLine.y.clamp(0.0, max(0.0, totalHeight - viewportHeight + lineHeight));
   }
 
   bool _needsLayoutForScroll(double newScrollOffset) {
@@ -401,7 +400,6 @@ class RenderCustomText extends RenderBox {
     final highlightPaint = Paint()..color = const Color(0xFFFFD700);
     for (final line in _lines) {
       final lineScreenY = line.y - _scrollOffset;
-
       if (lineScreenY + line.height <= 0 || lineScreenY + line.height >= size.height) continue;
 
       for (final word in line.words) {

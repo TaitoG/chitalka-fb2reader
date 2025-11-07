@@ -10,6 +10,7 @@ import 'package:charset_converter/charset_converter.dart';
 import '../core/fb2.dart';
 import '../models/book.dart';
 import 'reader.dart';
+import 'book_info_page.dart';
 import 'package:chitalka/themes/cover_palette.dart';
 
 class HomePage extends StatefulWidget {
@@ -69,15 +70,33 @@ class _HomePageState extends State<HomePage> {
         context,
         MaterialPageRoute(
           builder: (_) => RenderObjectReaderPage(
-              book: book,
-              metadata: metadata,
-              ),
+            book: book,
+            metadata: metadata,
+          ),
         ),
       );
     } catch (e) {
       _hideLoading();
       _showError('Failed to open book: $e');
     }
+  }
+
+  Future<void> _showBookInfo(BookMetadata metadata) async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => BookInfoPage(
+          metadata: metadata,
+          onRead: () => _openBook(metadata),
+          onDelete: () {
+            final index = _booksBox.values.toList().indexOf(metadata);
+            if (index != -1) {
+              _deleteBook(index);
+            }
+          },
+        ),
+      ),
+    );
   }
 
   Future<void> _pickAndAddBook() async {
@@ -111,6 +130,10 @@ class _HomePageState extends State<HomePage> {
       _hideLoading();
 
       _showSnackBar('Added: ${metadata.title}', Colors.green);
+
+      // Show book info page after adding
+      if (!mounted) return;
+      await _showBookInfo(metadata);
     } catch (e) {
       _hideLoading();
       _showError('Failed to add book: $e');
@@ -280,7 +303,6 @@ class _HomePageState extends State<HomePage> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Chitalka'),
-        elevation: 2,
         actions: [
           if (_booksBox.isNotEmpty)
             IconButton(
@@ -343,6 +365,7 @@ class _HomePageState extends State<HomePage> {
 
                         return GestureDetector(
                           onTap: () => _openBook(book),
+                          onLongPress: () => _showBookInfo(book),
                           child: Card(
                             elevation: 0,
                             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),

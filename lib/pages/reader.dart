@@ -129,11 +129,24 @@ class _RenderObjectReaderPageState extends State<RenderObjectReaderPage> {
   }
 
   Future<void> _savePosition() async {
-    if (widget.metadata != null) {
-      widget.metadata!.lastPosition = _scrollOffset.round();
-      await widget.metadata!.save();
+    if (widget.metadata == null) return;
+
+    final renderObject = _renderObject;
+
+    if (renderObject == null || renderObject.totalHeight == 0) {
+      return;
     }
+
+    final totalHeight = renderObject.totalHeight;
+    final currentPercent = (_scrollOffset / totalHeight * 100).clamp(0, 100).toInt();
+
+    widget.metadata!.lastPosition = _scrollOffset.round();
+    widget.metadata!.percentRead = currentPercent;
+    widget.metadata!.lastRead = DateTime.now();
+
+    await widget.metadata!.save();
   }
+
 
   RenderCustomText? get _renderObject {
     final context = _renderKey.currentContext;
@@ -354,13 +367,12 @@ class _RenderObjectReaderPageState extends State<RenderObjectReaderPage> {
               height: bottomInfoHeight,
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                crossAxisAlignment: CrossAxisAlignment.baseline,
-                textBaseline: TextBaseline.alphabetic,
+                crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
                   Expanded(
                     child: Text(
                       _getCurrentSectionTitle(),
-                      style: const TextStyle(color: Colors.grey, fontSize: 12, height: 1.0),
+                      style: const TextStyle(fontSize: 12, height: 1.0),
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
@@ -369,7 +381,7 @@ class _RenderObjectReaderPageState extends State<RenderObjectReaderPage> {
                     totalHeight > 0
                         ? '${(_scrollOffset / totalHeight * 100).clamp(0, 100).toStringAsFixed(1)}%'
                         : '0%',
-                    style: const TextStyle(color: Colors.grey, fontSize: 12, height: 1.0),
+                    style: const TextStyle(fontSize: 12, height: 1.0),
                   ),
                 ],
               ),
