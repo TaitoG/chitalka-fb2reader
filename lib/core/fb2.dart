@@ -52,14 +52,16 @@ class Fb2Parse {
         final title = element.findElements('title').firstOrNull?.innerText ?? '';
         final paragraphs = element.findElements('p').map((p) => p.innerText).toList();
         final subsections = _parseSections(element);
-        if (paragraphs.isEmpty && subsections.isEmpty) {
-          continue;
+
+        if (paragraphs.isEmpty && subsections.isNotEmpty) {
+          sections.addAll(subsections);
+        } else if (paragraphs.isNotEmpty || subsections.isNotEmpty) {
+          sections.add(BookSection(
+              title: title,
+              paragraphs: paragraphs,
+              subsections: subsections
+          ));
         }
-        sections.add(BookSection(
-            title: title,
-            paragraphs: paragraphs,
-            subsections: subsections
-        ));
       }
     }
     return sections;

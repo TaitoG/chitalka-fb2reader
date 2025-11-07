@@ -1,39 +1,8 @@
 // services/custom_renderer.dart
 import 'package:flutter/material.dart';
 import 'dart:math';
-import 'theme_service.dart';
-
-class LayoutWord {
-  final String text;
-  final String cleanWord;
-  final Offset position;
-  final Size size;
-  final int documentOffset;
-  final bool isHeader;
-
-  LayoutWord({
-    required this.text,
-    required this.cleanWord,
-    required this.position,
-    required this.size,
-    required this.documentOffset,
-    this.isHeader = false,
-  });
-
-  Rect get bounds => position & size;
-}
-
-class LayoutLine {
-  final List<LayoutWord> words;
-  final double y;
-  final double height;
-
-  LayoutLine({
-    required this.words,
-    required this.y,
-    required this.height,
-  });
-}
+import 'package:chitalka/core/tokenizer.dart';
+import '../models/layout.dart';
 
 class RenderCustomText extends RenderBox {
   String _text;
@@ -41,14 +10,6 @@ class RenderCustomText extends RenderBox {
   double _scrollOffset;
   int? _selectedWordOffset;
   Set<String> _bookmarkedWords;
-
-  AppTheme _theme = AppTheme.light;
-  AppTheme get theme => _theme;
-  set theme(AppTheme value) {
-    if (_theme == value) return;
-    _theme = value;
-    markNeedsPaint();
-  }
 
   List<LayoutLine> _lines = [];
   List<LayoutLine> get lines => _lines;
@@ -66,7 +27,6 @@ class RenderCustomText extends RenderBox {
     _currentLayoutEnd = 0;
     markNeedsLayout();
   }
-
   final TextPainter _textPainter = TextPainter(
     textDirection: TextDirection.ltr,
   );
@@ -105,8 +65,29 @@ class RenderCustomText extends RenderBox {
   set scrollOffset(double value) {
     if (_scrollOffset == value) return;
 
-    final needsMoreLayout = _needsLayoutForScroll(value);
-    _scrollOffset = value.clamp(0.0, max(0.0, totalHeight - size.height));
+    final lineHeight = _textStyle.fontSize! * (_textStyle.height ?? 1.4); // для буфера
+    final maxScroll = max(0.0, totalHeight - size.height + lineHeight); // + height для переноса последней строки
+
+    var clamped = value.clamp(0.0, maxScroll);
+
+    // Выравниваем по ближайшей строке, чтобы последняя влезла целиком
+    LayoutLine? nearestLine;
+    double minDiff = double.infinity;
+    for (final line in _lines) {
+      final proposedY = line.y - clamped;
+      final diff = (proposedY).abs();
+      if (proposedY >= 0 && proposedY + line.height <= size.height && diff < minDiff) {
+        minDiff = diff;
+        nearestLine = line;
+      }
+    }
+
+    if (nearestLine != null) {
+      clamped = nearestLine.y; // Выравниваем скролл по началу строки
+    }
+
+    final needsMoreLayout = _needsLayoutForScroll(clamped);
+    _scrollOffset = clamped;
 
     if (needsMoreLayout) {
       markNeedsLayout();
@@ -133,13 +114,15 @@ class RenderCustomText extends RenderBox {
       }) {
     if (_lines.isEmpty) return currentOffset;
 
-    final targetY = forward ? currentOffset + viewportHeight : currentOffset - viewportHeight;
+    final lineHeight = _textStyle.fontSize! * (_textStyle.height ?? 1.4);
+    final targetY = forward ? currentOffset + viewportHeight - lineHeight : currentOffset - viewportHeight + lineHeight; // буфер для полной строки
+
     LayoutLine? bestLine;
     double bestDelta = double.infinity;
 
     for (final line in _lines) {
       final delta = (line.y - targetY).abs();
-      if (delta < bestDelta) {
+      if (delta < bestDelta && line.y + line.height <= totalHeight) { // Учёт height для влезания
         bestDelta = delta;
         bestLine = line;
       }
@@ -147,14 +130,15 @@ class RenderCustomText extends RenderBox {
 
     if (bestLine == null) return currentOffset;
 
-    return bestLine.y.clamp(0.0, max(0.0, totalHeight - viewportHeight));
+    return bestLine.y.clamp(0.0, max(0.0, totalHeight - viewportHeight + lineHeight)); // + height для переноса
   }
 
   bool _needsLayoutForScroll(double newScrollOffset) {
     if (_lines.isEmpty) return true;
     final lastLine = _lines.last;
-    final lastY = lastLine.y + lastLine.height;
-    return newScrollOffset + size.height * 2 > lastY && _currentLayoutEnd < _text.length;
+    final lastBottom = lastLine.y + lastLine.height;
+    final lineHeight = _textStyle.fontSize! * (_textStyle.height ?? 1.4); // default line height
+    return newScrollOffset + size.height > lastBottom - (lineHeight * 2) && _currentLayoutEnd < _text.length; // буфер в 2 строки
   }
 
   int? get selectedWordOffset => _selectedWordOffset;
@@ -180,7 +164,6 @@ class RenderCustomText extends RenderBox {
 
     size = Size(constraints.maxWidth, constraints.maxHeight);
 
-    // Принудительно вёрстаем до scrollOffset
     if (_scrollOffset > 0 && _needsLayoutForScroll(_scrollOffset)) {
       layoutUntilScrollOffset(_scrollOffset, size.height);
     }
@@ -268,12 +251,10 @@ class RenderCustomText extends RenderBox {
     if (startOffset >= _text.length) return;
 
     final chunk = _text.substring(startOffset, endOffset);
-    final tokens = _tokenize(chunk);
+    final tokens = tokenize(chunk);
     double currentY = _lines.isEmpty ? 0 : (_lines.last.y + _lines.last.height);
     double currentX = 0;
     List<LayoutWord> currentLineWords = [];
-
-
 
     final defaultLineHeight = _textStyle.fontSize! * (_textStyle.height ?? 1.4);
     int documentOffset = startOffset;
@@ -409,64 +390,6 @@ class RenderCustomText extends RenderBox {
     _currentLayoutEnd = endOffset;
   }
 
-  double _getLastLineEndX() {
-    if (_lines.isEmpty || _lines.last.words.isEmpty) return 0;
-    final lastWord = _lines.last.words.last;
-    return lastWord.position.dx + lastWord.size.width;
-  }
-
-  // -----------------------------------------------------------------
-  //  TOKENIZATION
-  // -----------------------------------------------------------------
-  List<_Token> _tokenize(String text) {
-    final tokens = <_Token>[];
-    final headerPattern = RegExp(r'§([^§]+)§');
-    int lastEnd = 0;
-
-    for (final match in headerPattern.allMatches(text)) {
-      if (match.start > lastEnd) {
-        final prefix = text.substring(lastEnd, match.start);
-        tokens.addAll(_splitIntoTokens(prefix));
-      }
-
-      final title = match.group(1)!;
-      tokens.add(_Token(
-        text: '$title\n',
-        cleanWord: '',
-        isHeader: true,
-        headerTitle: title,
-      ));
-
-      lastEnd = match.end;
-    }
-
-    if (lastEnd < text.length) {
-      tokens.addAll(_splitIntoTokens(text.substring(lastEnd)));
-    }
-    return tokens;
-  }
-
-  List<_Token> _splitIntoTokens(String text) {
-    final tokens = <_Token>[];
-    final pattern = RegExp(
-      r"""[a-zA-Zа-яА-ЯёЁ0-9'’\-]+|[^\sa-zA-Zа-яА-ЯёЁ0-9'’\-]+|\s+""",
-      unicode: true,
-    );
-
-    for (final match in pattern.allMatches(text)) {
-      final word = match.group(0)!;
-      if (RegExp(r'\s').hasMatch(word)) {
-        tokens.add(_Token(text: word, cleanWord: ''));
-        continue;
-      }
-      final clean = word
-          .replaceAll(RegExp(r'[^\wа-яА-ЯёЁ]'), '')
-          .toLowerCase();
-      tokens.add(_Token(text: word, cleanWord: clean));
-    }
-    return tokens;
-  }
-
   // -----------------------------------------------------------------
   //  PAINT
   // -----------------------------------------------------------------
@@ -475,20 +398,14 @@ class RenderCustomText extends RenderBox {
     final canvas = context.canvas;
     canvas.clipRect(offset & size);
 
-    final highlightPaint = Paint()..color = ThemeService.getHighlightColor(_theme);
-    final headerBgPaint = Paint()..color = ThemeService.getHeaderBgColor(_theme);
-
+    final highlightPaint = Paint()..color = const Color(0xFFFFD700);
     for (final line in _lines) {
       final lineScreenY = line.y - _scrollOffset;
-      if (lineScreenY + line.height < -50 || lineScreenY > size.height + 50) continue;
+
+      if (lineScreenY + line.height <= 0 || lineScreenY + line.height >= size.height) continue;
 
       for (final word in line.words) {
         final wordScreenPos = Offset(offset.dx + word.position.dx, offset.dy + lineScreenY);
-
-        // Header background
-        if (word.isHeader) {
-          canvas.drawRect(wordScreenPos & word.size, headerBgPaint);
-        }
 
         // Selection
         if (_selectedWordOffset != null && word.documentOffset == _selectedWordOffset) {
@@ -548,14 +465,19 @@ class RenderCustomText extends RenderBox {
   double get totalHeight {
     if (_lines.isEmpty) return _estimateHeight();
     final lastLine = _lines.last;
-    final currentHeight = lastLine.y + lastLine.height;
-    if (_currentLayoutEnd >= _text.length) return currentHeight;
+    var currentHeight = lastLine.y + lastLine.height;
+
+    if (_currentLayoutEnd >= _text.length) {
+      return currentHeight;
+    }
 
     final remaining = _text.length - _currentLayoutEnd;
-    final avg = _currentLayoutEnd > 0 ? _currentLayoutEnd / _lines.length : 50;
-    final estimatedLines = remaining / avg;
+    final avgCharsPerLine = _currentLayoutEnd > 0 ? _currentLayoutEnd / _lines.length : 50.0;
+    final estimatedLines = (remaining / avgCharsPerLine).ceilToDouble();
     final lineHeight = _textStyle.fontSize! * (_textStyle.height ?? 1.4);
-    return currentHeight + estimatedLines * lineHeight;
+
+    // Добавляем буфер в 1 строку для "переноса"
+    return currentHeight + (estimatedLines + 1) * lineHeight;
   }
 
   double _estimateHeight() {
@@ -573,22 +495,6 @@ class RenderCustomText extends RenderBox {
   }
 }
 
-// -----------------------------------------------------------------
-//  TOKEN
-// -----------------------------------------------------------------
-class _Token {
-  final String text;
-  final String cleanWord;
-  final bool isHeader;
-  final String? headerTitle;
-
-  _Token({
-    required this.text,
-    this.cleanWord = '',
-    this.isHeader = false,
-    this.headerTitle,
-  });
-}
 
 // -----------------------------------------------------------------
 //  WIDGET

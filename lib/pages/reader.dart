@@ -5,6 +5,7 @@ import 'package:chitalka/services/custom_renderer.dart';
 import 'package:chitalka/services/dictionary.dart';
 import 'package:chitalka/services/bookmark_service.dart';
 import 'package:chitalka/widgets/translation.dart';
+import '../models/layout.dart';
 import '../themes/provider.dart';
 
 class RenderObjectReaderPage extends StatefulWidget {
@@ -316,7 +317,6 @@ class _RenderObjectReaderPageState extends State<RenderObjectReaderPage> {
     final renderObject = _renderObject;
     final totalHeight = renderObject?.totalHeight ?? 0;
 
-    // ← Получаем цвет текста из текущей темы
     final textColor = Theme.of(context).textTheme.bodyMedium?.color ?? Colors.black;
 
     return Scaffold(
@@ -337,7 +337,7 @@ class _RenderObjectReaderPageState extends State<RenderObjectReaderPage> {
                   textStyle: TextStyle(
                     fontSize: _fontSize,
                     height: _lineHeight,
-                    color: textColor, // ← Передаём цвет текста
+                    color: textColor,
                   ),
                   scrollOffset: _scrollOffset,
                   selectedWordOffset: _selectedWordOffset,

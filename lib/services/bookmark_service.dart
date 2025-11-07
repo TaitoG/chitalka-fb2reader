@@ -1,5 +1,4 @@
 // services/bookmark.dart
-
 import 'package:hive/hive.dart';
 import 'package:chitalka/models/bookmark.dart';
 import 'package:uuid/uuid.dart';
