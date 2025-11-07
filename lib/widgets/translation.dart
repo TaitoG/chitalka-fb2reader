@@ -465,8 +465,8 @@ class _TranslationBottomSheetState extends State<TranslationBottomSheet> {
           ),
           const SizedBox(height: 8),
           ..._entries.map((entry) => Card(
+            color: Theme.of(context).colorScheme.surfaceContainerHighest,
             margin: const EdgeInsets.only(bottom: 16),
-            elevation: 2,
             child: Padding(
               padding: const EdgeInsets.all(16),
               child: Text(entry.definition, style: const TextStyle(fontSize: 16)),

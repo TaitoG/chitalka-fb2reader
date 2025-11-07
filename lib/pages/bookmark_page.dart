@@ -20,6 +20,7 @@ class _BookmarksPageState extends State<BookmarksPage> {
   List<Bookmark> _bookmarks = [];
   List<Bookmark> _filteredBookmarks = [];
   String _searchQuery = '';
+  late final TextEditingController _searchController;
   BookmarkType? _filterType;
   bool _showFavoritesOnly = false;
   String? _selectedTag;
@@ -28,6 +29,18 @@ class _BookmarksPageState extends State<BookmarksPage> {
   void initState() {
     super.initState();
     _loadBookmarks();
+    _searchController = TextEditingController();
+    _searchController.addListener(() {
+      setState(() {
+        _searchQuery = _searchController.text;
+        _applyFilters();
+      });
+    });
+  }
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
   }
 
   Future<void> _loadBookmarks() async {
@@ -121,30 +134,19 @@ class _BookmarksPageState extends State<BookmarksPage> {
           Padding(
             padding: const EdgeInsets.all(16),
             child: TextField(
+              controller: _searchController,
               decoration: InputDecoration(
                 hintText: 'Search bookmarks...',
                 prefixIcon: const Icon(Icons.search),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                ),
                 suffixIcon: _searchQuery.isNotEmpty
                     ? IconButton(
                   icon: const Icon(Icons.clear),
                   onPressed: () {
-                    setState(() {
-                      _searchQuery = '';
-                      _applyFilters();
-                    });
+                    _searchController.clear();
                   },
                 )
                     : null,
               ),
-              onChanged: (value) {
-                setState(() {
-                  _searchQuery = value;
-                  _applyFilters();
-                });
-              },
             ),
           ),
 
@@ -204,13 +206,26 @@ class _BookmarkCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+
     return Card(
+      elevation: 0,
       margin: const EdgeInsets.only(bottom: 12),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      color: colorScheme.surfaceContainerHighest,
       child: InkWell(
         onTap: onTap,
         borderRadius: BorderRadius.circular(12),
-        child: Padding(
+        child: Container(
           padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: colorScheme.outline.withOpacity(0.3),
+              width: 1,
+            ),
+          ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -219,17 +234,19 @@ class _BookmarkCard extends StatelessWidget {
                   Expanded(
                     child: Text(
                       bookmark.bookTitle,
-                      style: TextStyle(
+                      style: theme.textTheme.bodySmall?.copyWith(
                         fontSize: 12,
+                        color: colorScheme.onSurfaceVariant,
                       ),
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
                   IconButton(
-                    icon: const Icon(Icons.delete_outline, size: 20),
+                    icon: Icon(Icons.delete_outline, size: 20, color: colorScheme.onSurfaceVariant),
                     onPressed: onDelete,
                     padding: EdgeInsets.zero,
                     constraints: const BoxConstraints(),
+                    splashRadius: 20,
                   ),
                 ],
               ),
@@ -238,9 +255,10 @@ class _BookmarkCard extends StatelessWidget {
 
               Text(
                 bookmark.text,
-                style: const TextStyle(
+                style: theme.textTheme.titleMedium?.copyWith(
                   fontSize: 16,
                   fontWeight: FontWeight.w500,
+                  color: colorScheme.onSurface,
                 ),
               ),
 
@@ -248,9 +266,10 @@ class _BookmarkCard extends StatelessWidget {
                 const SizedBox(height: 8),
                 Text(
                   bookmark.translation!,
-                  style: TextStyle(
+                  style: theme.textTheme.bodyMedium?.copyWith(
                     fontSize: 14,
                     fontStyle: FontStyle.italic,
+                    color: colorScheme.primary,
                   ),
                 ),
               ],
@@ -258,13 +277,21 @@ class _BookmarkCard extends StatelessWidget {
               if (bookmark.notes != null && bookmark.notes!.isNotEmpty) ...[
                 const SizedBox(height: 8),
                 Container(
+                  width: double.infinity,
                   padding: const EdgeInsets.all(8),
                   decoration: BoxDecoration(
+                    color: colorScheme.surfaceContainer,
                     borderRadius: BorderRadius.circular(6),
+                    border: Border.all(
+                      color: colorScheme.outline.withOpacity(0.2),
+                    ),
                   ),
                   child: Text(
                     bookmark.notes!,
-                    style: const TextStyle(fontSize: 13),
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      fontSize: 13,
+                      color: colorScheme.onSurfaceVariant,
+                    ),
                   ),
                 ),
               ],
@@ -276,17 +303,20 @@ class _BookmarkCard extends StatelessWidget {
                   runSpacing: 6,
                   children: bookmark.tags.map((tag) {
                     return Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 4,
-                      ),
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                       decoration: BoxDecoration(
+                        color: colorScheme.primary.withOpacity(0.1),
                         borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: colorScheme.primary.withOpacity(0.3),
+                        ),
                       ),
                       child: Text(
                         tag,
-                        style: TextStyle(
+                        style: theme.textTheme.labelSmall?.copyWith(
                           fontSize: 11,
+                          color: colorScheme.primary,
+                          fontWeight: FontWeight.w500,
                         ),
                       ),
                     );
@@ -297,19 +327,25 @@ class _BookmarkCard extends StatelessWidget {
               const SizedBox(height: 8),
               Row(
                 children: [
-                  Icon(Icons.calendar_today, size: 12,),
+                  Icon(Icons.calendar_today, size: 12, color: colorScheme.onSurfaceVariant),
                   const SizedBox(width: 4),
                   Text(
                     _formatDate(bookmark.createdAt),
-                    style: TextStyle(fontSize: 11,),
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      fontSize: 11,
+                      color: colorScheme.onSurfaceVariant,
+                    ),
                   ),
                   if (bookmark.reviewCount > 0) ...[
                     const SizedBox(width: 16),
-                    Icon(Icons.repeat, size: 12,),
+                    Icon(Icons.repeat, size: 12, color: colorScheme.onSurfaceVariant),
                     const SizedBox(width: 4),
                     Text(
                       '${bookmark.reviewCount}',
-                      style: TextStyle(fontSize: 11,),
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        fontSize: 11,
+                        color: colorScheme.onSurfaceVariant,
+                      ),
                     ),
                   ],
                 ],

@@ -73,10 +73,11 @@ class Fb2Parse {
 
     for (final bin in doc.findAllElements('binary')) {
       final id = bin.getAttribute('id');
-      final data = bin.innerText.trim();
+      final data = bin.innerText;
 
       if (id != null && data.isNotEmpty) {
-        bins[id] = data;
+        final cleanedData = data.replaceAll(RegExp(r'\s+'), '');
+        bins[id] = cleanedData;
       }
     }
 

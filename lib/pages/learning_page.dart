@@ -276,13 +276,28 @@ class _LearningPageState extends State<LearningPage> {
               child: GestureDetector(
                 onTap: _toggleReveal,
                 child: Card(
-                  elevation: 8,
+                  elevation: 0,
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(16),
                   ),
+                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
                   child: Container(
                     width: double.infinity,
                     padding: const EdgeInsets.all(24),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(
+                        color: Theme.of(context).colorScheme.outline.withOpacity(0.3),
+                        width: 1.5,
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Theme.of(context).shadowColor.withOpacity(0.1),
+                          blurRadius: 12,
+                          offset: const Offset(0, 4),
+                        ),
+                      ],
+                    ),
                     child: _buildFlashcardContent(),
                   ),
                 ),

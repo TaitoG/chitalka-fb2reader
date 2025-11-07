@@ -10,6 +10,7 @@ import 'package:charset_converter/charset_converter.dart';
 import '../core/fb2.dart';
 import '../models/book.dart';
 import 'reader.dart';
+import 'package:chitalka/themes/cover_palette.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({Key? key}) : super(key: key);
@@ -223,21 +224,37 @@ class _HomePageState extends State<HomePage> {
   }
 
   Widget _defaultCover(BookMetadata book) {
-    final hash = book.title.hashCode;
-    final color = Color((hash & 0xFFFFFF) | 0xFF000000).withOpacity(0.3);
+    final theme = Theme.of(context);
+    final palette = CoverPalettes.getForBook(book.title, theme);
+
     return Container(
-      decoration: BoxDecoration(gradient: LinearGradient(colors: [color, color.withOpacity(0.6)])),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            palette['primary']!,
+            palette['secondary']!,
+          ],
+        ),
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
+      ),
       child: Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const Icon(Icons.menu_book, size: 32,),
+            Icon(Icons.menu_book, size: 36, color: palette['icon']),
             const SizedBox(height: 8),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 8),
               child: Text(
                 book.title.split(' ').take(2).join('\n'),
-                style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold,),
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                  color: palette['text'],
+                  height: 1.2,
+                ),
                 textAlign: TextAlign.center,
                 maxLines: 3,
                 overflow: TextOverflow.ellipsis,
@@ -300,80 +317,124 @@ class _HomePageState extends State<HomePage> {
                   ),
                 );
               }
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+                    child: Text(
+                      'Recently opened books',
+                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                  Expanded(
+                    child: GridView.builder(
+                      padding: const EdgeInsets.all(16),
+                      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: 3,
+                        crossAxisSpacing: 16,
+                        mainAxisSpacing: 16,
+                        childAspectRatio: 0.7,
+                      ),
+                      itemCount: books.length,
+                      itemBuilder: (context, index) {
+                        final book = books[index];
+                        final originalIndex = _booksBox.values.toList().indexOf(book);
 
-              return GridView.builder(
-                padding: const EdgeInsets.all(16),
-                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: 3,
-                  crossAxisSpacing: 16,
-                  mainAxisSpacing: 16,
-                  childAspectRatio: 0.7,
-                ),
-                itemCount: books.length,
-                itemBuilder: (context, index) {
-                  final book = books[index];
-                  final originalIndex = _booksBox.values.toList().indexOf(book);
-
-                  return GestureDetector(
-                    onTap: () => _openBook(book),
-                    child: Card(
-                      elevation: 4,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                      child: Stack(
-                        children: [
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              Expanded(child: ClipRRect(borderRadius: const BorderRadius.vertical(top: Radius.circular(12)), child: _buildBookCover(book))),
-                              Padding(
-                                padding: const EdgeInsets.all(6),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(book.author.join(', '), style: TextStyle(fontSize: 11,), maxLines: 1, overflow: TextOverflow.ellipsis),
-                                    const SizedBox(height: 2),
-                                    Text('Read ${_formatDate(book.lastRead ?? book.addedDate)}', style: TextStyle(fontSize: 9,)),
-                                  ],
+                        return GestureDetector(
+                          onTap: () => _openBook(book),
+                          child: Card(
+                            elevation: 0,
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                            color: Theme.of(context).colorScheme.surfaceContainer,
+                            child: Container(
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(
+                                  color: Theme.of(context).colorScheme.outline.withOpacity(0.2),
+                                  width: 1,
                                 ),
                               ),
-                            ],
-                          ),
-                          Positioned(
-                            top: 6,
-                            right: 6,
-                            child: GestureDetector(
-                              onTap: () => _deleteBook(originalIndex),
-                              child: Container(
-                                padding: const EdgeInsets.all(4),
-                                decoration: BoxDecoration(color: Colors.red.withOpacity(0.9), borderRadius: BorderRadius.circular(20)),
-                                child: const Icon(Icons.close, size: 14, color: Colors.white),
+                              child: Stack(
+                                children: [
+                                  Column(
+                                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                                    children: [
+                                      Expanded(
+                                        child: ClipRRect(
+                                          borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
+                                          child: _buildBookCover(book),
+                                        ),
+                                      ),
+                                      Padding(
+                                        padding: const EdgeInsets.all(4),
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              book.author.join(', '),
+                                              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                                fontSize: 10,
+                                                fontWeight: FontWeight.w500,
+                                              ),
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                            const SizedBox(height: 2),
+                                            Text(
+                                              'Read ${_formatDate(book.lastRead ?? book.addedDate)}',
+                                              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                                                fontSize: 9,
+                                                color: Theme.of(context).colorScheme.onSurfaceVariant,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  Positioned(
+                                    top: 6,
+                                    right: 6,
+                                    child: GestureDetector(
+                                      onTap: () => _deleteBook(originalIndex),
+                                      child: Container(
+                                        padding: const EdgeInsets.all(4),
+                                        decoration: BoxDecoration(
+                                          color: Colors.red.withOpacity(0.9),
+                                          borderRadius: BorderRadius.circular(20),
+                                        ),
+                                        child: const Icon(Icons.close, size: 14, color: Colors.white),
+                                      ),
+                                    ),
+                                  ),
+                                ],
                               ),
                             ),
                           ),
-                        ],
-                      ),
+                        );
+                      },
                     ),
-                  );
-                },
+                  ),
+                ],
               );
             },
           ),
 
           if (_isLoading)
-            Container(
-              child: Center(
-                child: Card(
-                  margin: const EdgeInsets.all(40),
-                  child: Padding(
-                    padding: const EdgeInsets.all(20),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const CircularProgressIndicator(),
-                        const SizedBox(height: 16),
-                        Text(_loadingMessage ?? 'Loading...', style: const TextStyle(fontSize: 16)),
-                      ],
-                    ),
+            Center(
+              child: Card(
+                color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                margin: const EdgeInsets.all(40),
+                child: Padding(
+                  padding: const EdgeInsets.all(20),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const CircularProgressIndicator(),
+                      const SizedBox(height: 16),
+                      Text(_loadingMessage ?? 'Loading...', style: const TextStyle(fontSize: 16)),
+                    ],
                   ),
                 ),
               ),
@@ -425,7 +486,7 @@ class _BookSearchDelegate extends SearchDelegate<String> {
         final book = results[i];
         return ListTile(
           leading: book.coverImage != null
-              ? Image.memory(base64.decode(book.coverImage!), width: 40, height: 40, fit: BoxFit.cover)
+              ? Image.memory(base64.decode(book.coverImage!), fit: BoxFit.cover)
               : const Icon(Icons.book),
           title: Text(book.title, maxLines: 1, overflow: TextOverflow.ellipsis),
           subtitle: Text(book.author.join(', '), style: const TextStyle(fontSize: 12)),
