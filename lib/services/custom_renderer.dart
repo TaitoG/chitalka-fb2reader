@@ -280,9 +280,10 @@ class RenderCustomText extends RenderBox {
 
         if (_lines.isNotEmpty && _lastViewportHeight > 0) {
           final currentPage = (currentY / _lastViewportHeight).floor();
+          final pageStart = currentPage * _lastViewportHeight;
           final nextPageStart = (currentPage + 1) * _lastViewportHeight;
 
-          if (currentY > currentPage * _lastViewportHeight + defaultLineHeight) {
+          if (currentY > pageStart + (defaultLineHeight * 0.5)) {
             currentY = nextPageStart;
           }
         }
@@ -291,8 +292,9 @@ class RenderCustomText extends RenderBox {
           fontWeight: FontWeight.bold,
           fontSize: _textStyle.fontSize! * 1.25,
         );
+
         _textPainter.text = TextSpan(text: token.headerTitle, style: headerStyle);
-        _textPainter.layout();
+        _textPainter.layout(maxWidth: maxWidth);
 
         final headerHeight = _textPainter.size.height;
         final headerWord = LayoutWord(
@@ -319,7 +321,6 @@ class RenderCustomText extends RenderBox {
       _textPainter.layout();
       final tokenWidth = _textPainter.size.width;
 
-      // Line break because of width
       if (currentX + tokenWidth > maxWidth && currentLineWords.isNotEmpty) {
         final isLastLineOfChapter = isInsideChapter && token.text.trim().isEmpty;
         applyJustifyIfNeeded(
@@ -349,7 +350,6 @@ class RenderCustomText extends RenderBox {
       currentX += tokenWidth;
       documentOffset += token.text.length;
 
-      // Explicit paragraph break
       if (token.text.contains('\n')) {
         final isLastLineOfChapter = isInsideChapter && token.text.contains('\n\n');
         applyJustifyIfNeeded(
@@ -369,7 +369,6 @@ class RenderCustomText extends RenderBox {
       }
     }
 
-    // Flush remaining words
     if (currentLineWords.isNotEmpty) {
       final isLastLineOfChapter =
           isInsideChapter && currentLineWords.last.text.contains('\n');
@@ -474,7 +473,6 @@ class RenderCustomText extends RenderBox {
     final estimatedLines = (remaining / avgCharsPerLine).ceilToDouble();
     final lineHeight = _textStyle.fontSize! * (_textStyle.height ?? 1.4);
 
-    // Добавляем буфер в 1 строку для "переноса"
     return currentHeight + (estimatedLines + 1) * lineHeight;
   }
 

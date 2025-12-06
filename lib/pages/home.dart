@@ -122,7 +122,6 @@ class _HomePageState extends State<HomePage> {
         annotation: parsed.annotation,
         filePath: path,
         addedDate: DateTime.now(),
-        lastRead: DateTime.now(),
         coverImage: parsed.coverImage,
       );
 

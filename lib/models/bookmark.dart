@@ -1,5 +1,4 @@
-//bookmark.dart
-
+// bookmark.dart
 import 'package:hive/hive.dart';
 
 part 'bookmark.g.dart';
@@ -35,6 +34,7 @@ class Bookmark extends HiveObject {
 
   @HiveField(7)
   int sectionIndex;
+
   @HiveField(8)
   int pageIndex;
 
@@ -56,6 +56,24 @@ class Bookmark extends HiveObject {
   @HiveField(14)
   bool isFavorite;
 
+  @HiveField(15)
+  int currentRepetition;
+
+  @HiveField(16)
+  int totalCorrectCount;
+
+  @HiveField(17)
+  DateTime? nextReviewDate;
+
+  @HiveField(18)
+  int intervalDays;
+
+  @HiveField(19)
+  int masteryLevel;
+
+  @HiveField(20)
+  double progressPercent;
+
   Bookmark({
     required this.id,
     required this.bookId,
@@ -72,6 +90,12 @@ class Bookmark extends HiveObject {
     this.notes,
     this.tags = const [],
     this.isFavorite = false,
+    this.currentRepetition = 0,
+    this.totalCorrectCount = 0,
+    this.nextReviewDate,
+    this.intervalDays = 0,
+    this.masteryLevel = 0,
+    this.progressPercent = 0.0,
   });
 
   Bookmark copyWith({
@@ -90,6 +114,12 @@ class Bookmark extends HiveObject {
     String? notes,
     List<String>? tags,
     bool? isFavorite,
+    int? currentRepetition,
+    int? totalCorrectCount,
+    DateTime? nextReviewDate,
+    int? intervalDays,
+    int? masteryLevel,
+    double? progressPercent,
   }) {
     return Bookmark(
       id: id ?? this.id,
@@ -107,12 +137,27 @@ class Bookmark extends HiveObject {
       notes: notes ?? this.notes,
       tags: tags ?? this.tags,
       isFavorite: isFavorite ?? this.isFavorite,
+      currentRepetition: currentRepetition ?? this.currentRepetition,
+      totalCorrectCount: totalCorrectCount ?? this.totalCorrectCount,
+      nextReviewDate: nextReviewDate ?? this.nextReviewDate,
+      intervalDays: intervalDays ?? this.intervalDays,
+      masteryLevel: masteryLevel ?? this.masteryLevel,
+      progressPercent: progressPercent ?? this.progressPercent,
     );
+  }
+
+  bool needsReviewToday() {
+    if (nextReviewDate == null) return true;
+    final today = DateTime.now();
+    return nextReviewDate!.isBefore(today) ||
+        nextReviewDate!.year == today.year &&
+            nextReviewDate!.month == today.month &&
+            nextReviewDate!.day == today.day;
   }
 
   @override
   String toString() {
-    return 'Bookmark(text: $text, type: $type, book: $bookTitle)';
+    return 'Bookmark(text: $text, type: $type, book: $bookTitle, progress: ${progressPercent.toStringAsFixed(0)}%)';
   }
 }
 

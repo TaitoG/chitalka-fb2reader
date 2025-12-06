@@ -32,13 +32,19 @@ class BookmarkAdapter extends TypeAdapter<Bookmark> {
       notes: fields[12] as String?,
       tags: (fields[13] as List).cast<String>(),
       isFavorite: fields[14] as bool,
+      currentRepetition: fields[15] as int,
+      totalCorrectCount: fields[16] as int,
+      nextReviewDate: fields[17] as DateTime?,
+      intervalDays: fields[18] as int,
+      masteryLevel: fields[19] as int,
+      progressPercent: fields[20] as double,
     );
   }
 
   @override
   void write(BinaryWriter writer, Bookmark obj) {
     writer
-      ..writeByte(15)
+      ..writeByte(21)
       ..writeByte(0)
       ..write(obj.id)
       ..writeByte(1)
@@ -68,7 +74,19 @@ class BookmarkAdapter extends TypeAdapter<Bookmark> {
       ..writeByte(13)
       ..write(obj.tags)
       ..writeByte(14)
-      ..write(obj.isFavorite);
+      ..write(obj.isFavorite)
+      ..writeByte(15)
+      ..write(obj.currentRepetition)
+      ..writeByte(16)
+      ..write(obj.totalCorrectCount)
+      ..writeByte(17)
+      ..write(obj.nextReviewDate)
+      ..writeByte(18)
+      ..write(obj.intervalDays)
+      ..writeByte(19)
+      ..write(obj.masteryLevel)
+      ..writeByte(20)
+      ..write(obj.progressPercent);
   }
 
   @override

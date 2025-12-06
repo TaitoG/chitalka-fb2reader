@@ -13,49 +13,51 @@ class LearningPage extends StatefulWidget {
 class _LearningPageState extends State<LearningPage> {
   final BookmarkService _bookmarkService = BookmarkService();
 
-  List<Bookmark> _flashcards = [];
-  int _currentCardIndex = 0;
+  List<Bookmark> _sessionWords = [];
+  int _currentIndex = 0;
   bool _isRevealed = false;
   bool _isLoading = true;
+  int _totalRepetitions = 0;
+  int _completedRepetitions = 0;
 
   @override
   void initState() {
     super.initState();
-    _loadFlashcards();
+    _loadSession();
   }
 
-  Future<void> _loadFlashcards() async {
+  Future<void> _loadSession() async {
     try {
       await _bookmarkService.initialize();
-      final List<Bookmark> allBookmarks = await _bookmarkService.getAllBookmarks();
-      final wordBookmarks = allBookmarks.where((bookmark) => bookmark.type == BookmarkType.word).toList();
-      wordBookmarks.shuffle();
+
+      final cardsForToday = await _bookmarkService.getCardsForToday();
+
+      cardsForToday.sort((a, b) {
+        if (a.masteryLevel == 0 && b.masteryLevel > 0) return 1;
+        if (a.masteryLevel > 0 && b.masteryLevel == 0) return -1;
+        return a.lastReviewedAt?.compareTo(b.lastReviewedAt ?? DateTime.now()) ?? 0;
+      });
+
+      int totalReps = 0;
+      for (var word in cardsForToday) {
+        totalReps += (3 - word.currentRepetition);
+      }
 
       setState(() {
-        _flashcards = wordBookmarks;
+        _sessionWords = cardsForToday;
+        _totalRepetitions = totalReps;
+        _completedRepetitions = 0;
+        _currentIndex = 0;
         _isLoading = false;
       });
+
+      print('📚 Session loaded: ${_sessionWords.length} words, $_totalRepetitions repetitions needed');
     } catch (e) {
-      print('Error loading flashcards: $e');
+      print('Error loading session: $e');
       setState(() {
         _isLoading = false;
       });
     }
-  }
-
-  void _nextCard() {
-    setState(() {
-      _currentCardIndex = (_currentCardIndex + 1) % _flashcards.length;
-      _isRevealed = false;
-    });
-  }
-
-  void _prevCard() {
-    setState(() {
-      _currentCardIndex = (_currentCardIndex - 1) % _flashcards.length;
-      if (_currentCardIndex < 0) _currentCardIndex = _flashcards.length - 1;
-      _isRevealed = false;
-    });
   }
 
   void _toggleReveal() {
@@ -64,118 +66,330 @@ class _LearningPageState extends State<LearningPage> {
     });
   }
 
-  void _markRemembered() {
-    _updateReviewCount();
-    _nextCard();
-  }
+  Future<void> _markRemembered() async {
+    if (_sessionWords.isEmpty) return;
 
-  void _markForgotten() {
-    _updateReviewCount();
-    _nextCard();
-  }
+    final currentWord = _sessionWords[_currentIndex];
+    final oldRepetition = currentWord.currentRepetition;
 
-  Future<void> _updateReviewCount() async {
-    if (_flashcards.isEmpty) return;
+    await _bookmarkService.markAsCorrect(currentWord.id);
 
-    final currentBookmark = _flashcards[_currentCardIndex];
-    await _bookmarkService.markAsReviewed(currentBookmark.id);
-
-    _loadFlashcards();
-  }
-
-  void _resetProgress() {
     setState(() {
-      _currentCardIndex = 0;
+      _completedRepetitions++;
+    });
+
+    await _reloadCurrentWord();
+
+    final updatedWord = _sessionWords[_currentIndex];
+
+    print('✅ Word answered correctly: ${updatedWord.text}');
+    print('   Old repetition: $oldRepetition, New: ${updatedWord.currentRepetition}');
+    print('   Progress: $_completedRepetitions/$_totalRepetitions');
+
+    if (updatedWord.currentRepetition >= 3) {
+      _showWordMasteredSnackbar(updatedWord);
+
+      setState(() {
+        _sessionWords.removeAt(_currentIndex);
+        if (_sessionWords.isEmpty) {
+          _currentIndex = 0;
+        } else if (_currentIndex >= _sessionWords.length) {
+          _currentIndex = _sessionWords.length - 1;
+        }
+        _isRevealed = false;
+      });
+
+      print('🎉 Word completed and removed from session');
+
+      if (_sessionWords.isEmpty) {
+        _showSessionComplete();
+      }
+    } else {
+      _nextWord();
+    }
+  }
+
+  Future<void> _markForgotten() async {
+    if (_sessionWords.isEmpty) return;
+
+    final currentWord = _sessionWords[_currentIndex];
+    final oldRepetition = currentWord.currentRepetition;
+
+    await _bookmarkService.markAsIncorrect(currentWord.id);
+
+    final repetitionsToAdd = 3 - oldRepetition;
+
+    setState(() {
+      _completedRepetitions++;
+      _totalRepetitions += repetitionsToAdd;
+    });
+
+    await _reloadCurrentWord();
+
+    print('❌ Word answered incorrectly: ${currentWord.text}');
+    print('   Repetitions reset, added $repetitionsToAdd to total');
+    print('   Progress: $_completedRepetitions/$_totalRepetitions');
+
+    _nextWord();
+  }
+
+  void _nextWord() {
+    setState(() {
+      if (_sessionWords.isNotEmpty) {
+        _currentIndex = (_currentIndex + 1) % _sessionWords.length;
+      }
       _isRevealed = false;
-      _flashcards.shuffle();
     });
   }
 
+  void _prevWord() {
+    setState(() {
+      if (_sessionWords.isNotEmpty) {
+        _currentIndex = (_currentIndex - 1) % _sessionWords.length;
+        if (_currentIndex < 0) _currentIndex = _sessionWords.length - 1;
+      }
+      _isRevealed = false;
+    });
+  }
+
+  Future<void> _reloadCurrentWord() async {
+    if (_sessionWords.isEmpty) return;
+
+    final currentId = _sessionWords[_currentIndex].id;
+    final allBookmarks = await _bookmarkService.getAllBookmarks();
+
+    try {
+      final updated = allBookmarks.firstWhere((b) => b.id == currentId);
+      setState(() {
+        _sessionWords[_currentIndex] = updated;
+      });
+    } catch (e) {
+      print('Error reloading word: $e');
+    }
+  }
+
+  void _showWordMasteredSnackbar(Bookmark word) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          '🎉 "${word.text}" completed! Progress: ${word.progressPercent.toStringAsFixed(0)}%',
+        ),
+        backgroundColor: Colors.green,
+        duration: const Duration(seconds: 2),
+      ),
+    );
+  }
+
+  void _showSessionComplete() {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: const Text('🎉 Session Complete!'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Great job! You\'ve completed all repetitions for today.'),
+            const SizedBox(height: 16),
+            Text('Total repetitions completed: $_completedRepetitions'),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.of(context).pop();
+              Navigator.of(context).pop();
+            },
+            child: const Text('Done'),
+          ),
+          FilledButton(
+            onPressed: () {
+              Navigator.of(context).pop();
+              _loadSession();
+            },
+            child: const Text('Continue Learning'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _shuffleWords() async {
+    for (var word in _sessionWords) {
+      await _bookmarkService.resetSessionProgress(word.id);
+    }
+
+    final allBookmarks = await _bookmarkService.getAllBookmarks();
+    for (int i = 0; i < _sessionWords.length; i++) {
+      try {
+        final updated = allBookmarks.firstWhere((b) => b.id == _sessionWords[i].id);
+        _sessionWords[i] = updated;
+      } catch (e) {
+        print('Error reloading word during shuffle: $e');
+      }
+    }
+
+    setState(() {
+      _sessionWords.shuffle();
+      _currentIndex = 0;
+      _isRevealed = false;
+      _totalRepetitions = _sessionWords.length * 3;
+      _completedRepetitions = 0;
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Cards shuffled! Progress reset.'),
+        duration: Duration(seconds: 2),
+      ),
+    );
+  }
+
+  Widget _buildMasteryIndicator(Bookmark word) {
+    final masteryPercent = word.progressPercent;
+    return Column(
+      children: [
+            Text(
+              '${masteryPercent.toStringAsFixed(0)}% Mastered',
+              style: TextStyle(
+                fontSize: 13,
+                color: Theme.of(context).textTheme.bodyMedium?.color?.withOpacity(0.7),
+              ),
+            ),
+      ],
+    );
+  }
+
+  Widget _buildOverallProgress() {
+    final progress = _totalRepetitions > 0
+        ? _completedRepetitions / _totalRepetitions
+        : 0.0;
+
+    return Column(
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: LinearProgressIndicator(
+                      value: progress,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(
+              '$_completedRepetitions / $_totalRepetitions',
+              style: TextStyle(
+                fontSize: 13,
+                color: Theme.of(context).textTheme.bodyMedium?.color,
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+      ],
+    );
+  }
+
   Widget _buildFlashcardContent() {
-    final currentBookmark = _flashcards[_currentCardIndex];
+    final currentWord = _sessionWords[_currentIndex];
 
     return Column(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        // Book title
         Text(
-          currentBookmark.bookTitle,
-          style: const TextStyle(
+          currentWord.bookTitle,
+          style: TextStyle(
             fontSize: 14,
             fontStyle: FontStyle.italic,
+            color: Theme.of(context).textTheme.bodyMedium?.color,
           ),
           textAlign: TextAlign.center,
         ),
         const SizedBox(height: 20),
-
-        // Word
         Text(
-          currentBookmark.text,
-          style: const TextStyle(
+          currentWord.text,
+          style: TextStyle(
             fontSize: 32,
             fontWeight: FontWeight.bold,
+            color: Theme.of(context).textTheme.titleLarge?.color,
           ),
           textAlign: TextAlign.center,
         ),
+        const SizedBox(height: 8),
+        _buildMasteryIndicator(currentWord),
         const SizedBox(height: 30),
-
         if (_isRevealed)
           Expanded(
             child: SingleChildScrollView(
               child: Column(
                 children: [
-                  const Text(
+                  Text(
                     'Translation:',
                     style: TextStyle(
                       fontSize: 16,
+                      color: Theme.of(context).textTheme.bodyMedium?.color,
                     ),
                   ),
                   const SizedBox(height: 10),
                   Text(
-                    currentBookmark.translation ?? 'No translation available',
-                    style: const TextStyle(
+                    currentWord.translation ?? 'No translation available',
+                    style: TextStyle(
                       fontSize: 20,
-                      color: Colors.deepPurple,
+                      color: Theme.of(context).colorScheme.primary,
                       fontWeight: FontWeight.w500,
                     ),
                     textAlign: TextAlign.center,
                   ),
-                  // Additional context if available
-                  if (currentBookmark.context != null && currentBookmark.context!.isNotEmpty)
+                  if (currentWord.context != null && currentWord.context!.isNotEmpty)
                     Padding(
                       padding: const EdgeInsets.only(top: 20),
                       child: Text(
-                        'Context: ${currentBookmark.context}',
-                        style: const TextStyle(
+                        'Context: ${currentWord.context}',
+                        style: TextStyle(
                           fontSize: 14,
                           fontStyle: FontStyle.italic,
+                          color: Theme.of(context).textTheme.bodyMedium?.color,
                         ),
                         textAlign: TextAlign.center,
                       ),
                     ),
-                  // Notes if available
-                  if (currentBookmark.notes != null && currentBookmark.notes!.isNotEmpty)
+                  if (currentWord.notes != null && currentWord.notes!.isNotEmpty)
                     Padding(
                       padding: const EdgeInsets.only(top: 15),
                       child: Text(
-                        'Notes: ${currentBookmark.notes}',
-                        style: const TextStyle(
+                        'Notes: ${currentWord.notes}',
+                        style: TextStyle(
                           fontSize: 14,
+                          color: Theme.of(context).textTheme.bodyMedium?.color,
                         ),
                         textAlign: TextAlign.center,
                       ),
                     ),
-                  // Tags if available
-                  if (currentBookmark.tags.isNotEmpty)
+                  if (currentWord.tags.isNotEmpty)
                     Padding(
                       padding: const EdgeInsets.only(top: 15),
                       child: Wrap(
                         spacing: 8,
-                        children: currentBookmark.tags.map((tag) => Chip(
+                        children: currentWord.tags
+                            .map((tag) => Chip(
                           label: Text(tag),
                           materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
                           visualDensity: VisualDensity.compact,
-                        )).toList(),
+                        ))
+                            .toList(),
                       ),
                     ),
                 ],
@@ -185,9 +399,10 @@ class _LearningPageState extends State<LearningPage> {
         else
           Column(
             children: [
-              const Icon(
+              Icon(
                 Icons.visibility_off,
                 size: 40,
+                color: Theme.of(context).iconTheme.color,
               ),
               const SizedBox(height: 10),
               Text(
@@ -195,6 +410,7 @@ class _LearningPageState extends State<LearningPage> {
                 style: TextStyle(
                   fontSize: 16,
                   fontStyle: FontStyle.italic,
+                  color: Theme.of(context).textTheme.bodyMedium?.color,
                 ),
               ),
             ],
@@ -209,32 +425,30 @@ class _LearningPageState extends State<LearningPage> {
       appBar: AppBar(
         title: const Text('Learning'),
         actions: [
-          if (_flashcards.isNotEmpty)
+          if (_sessionWords.isNotEmpty)
             IconButton(
               icon: const Icon(Icons.shuffle),
-              onPressed: _resetProgress,
+              onPressed: _shuffleWords,
               tooltip: 'Shuffle cards',
             ),
         ],
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
-          : _flashcards.isEmpty
-          ? const Center(
+          : _sessionWords.isEmpty
+          ? Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.school, size: 80,),
-            SizedBox(height: 20),
+            const Icon(Icons.celebration, size: 80, color: Colors.green),
+            const SizedBox(height: 20),
             Text(
-              'No flashcards available',
-              style: TextStyle(fontSize: 18,),
-            ),
-            SizedBox(height: 10),
-            Text(
-              'Add some word bookmarks to start learning',
-              style: TextStyle(fontSize: 14,),
-              textAlign: TextAlign.center,
+              'No cards due today!',
+              style: TextStyle(
+                fontSize: 24,
+                fontWeight: FontWeight.bold,
+                color: Theme.of(context).textTheme.titleLarge?.color,
+              ),
             ),
           ],
         ),
@@ -243,29 +457,7 @@ class _LearningPageState extends State<LearningPage> {
         padding: const EdgeInsets.all(24.0),
         child: Column(
           children: [
-            LinearProgressIndicator(
-              value: _flashcards.isEmpty ? 0 : (_currentCardIndex + 1) / _flashcards.length,
-            ),
-            const SizedBox(height: 16),
-
-            // Progress text and stats
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  '${_currentCardIndex + 1} / ${_flashcards.length}',
-                  style: const TextStyle(
-                    fontSize: 14,
-                  ),
-                ),
-                Text(
-                  'Reviews: ${_flashcards[_currentCardIndex].reviewCount}',
-                  style: const TextStyle(
-                    fontSize: 12,
-                  ),
-                ),
-              ],
-            ),
+            _buildOverallProgress(),
             const SizedBox(height: 16),
 
             // Flashcard
@@ -287,13 +479,6 @@ class _LearningPageState extends State<LearningPage> {
                         color: Theme.of(context).colorScheme.outline.withOpacity(0.3),
                         width: 1.5,
                       ),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Theme.of(context).shadowColor.withOpacity(0.1),
-                          blurRadius: 12,
-                          offset: const Offset(0, 4),
-                        ),
-                      ],
                     ),
                     child: _buildFlashcardContent(),
                   ),
@@ -303,7 +488,7 @@ class _LearningPageState extends State<LearningPage> {
 
             const SizedBox(height: 24),
 
-            // Navigation and action buttons
+            // Action buttons
             if (_isRevealed)
               Row(
                 children: [
@@ -328,7 +513,10 @@ class _LearningPageState extends State<LearningPage> {
                         backgroundColor: Colors.green,
                         padding: const EdgeInsets.symmetric(vertical: 16),
                       ),
-                      child: const Text('I Remember', style: TextStyle(color: Colors.white),),
+                      child: const Text(
+                        'I Remember',
+                        style: TextStyle(color: Colors.white),
+                      ),
                     ),
                   ),
                 ],
@@ -338,7 +526,7 @@ class _LearningPageState extends State<LearningPage> {
                 children: [
                   Expanded(
                     child: OutlinedButton(
-                      onPressed: _prevCard,
+                      onPressed: _sessionWords.length > 1 ? _prevWord : null,
                       style: OutlinedButton.styleFrom(
                         padding: const EdgeInsets.symmetric(vertical: 16),
                       ),
@@ -350,10 +538,13 @@ class _LearningPageState extends State<LearningPage> {
                     child: ElevatedButton(
                       onPressed: _toggleReveal,
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.deepPurple,
+                        backgroundColor: Theme.of(context).colorScheme.primary,
                         padding: const EdgeInsets.symmetric(vertical: 16),
                       ),
-                      child: const Text('Reveal Translation', style: TextStyle(color: Colors.white)),
+                      child: const Text(
+                        'Reveal Translation',
+                        style: TextStyle(color: Colors.white),
+                      ),
                     ),
                   ),
                 ],

@@ -1,4 +1,4 @@
-// services/bookmark.dart
+// services/bookmark_service.dart
 import 'package:hive/hive.dart';
 import 'package:chitalka/models/bookmark.dart';
 import 'package:uuid/uuid.dart';
@@ -6,6 +6,8 @@ import 'package:uuid/uuid.dart';
 class BookmarkService {
   Box<Bookmark>? _bookmarkBox;
   final _uuid = const Uuid();
+
+  static const List<int> _intervals = [0, 1, 3, 7, 14, 30, 60];
 
   Future<void> initialize() async {
     if (_bookmarkBox != null) return;
@@ -40,6 +42,12 @@ class BookmarkService {
       createdAt: DateTime.now(),
       notes: notes,
       tags: tags,
+      currentRepetition: 0,
+      totalCorrectCount: 0,
+      nextReviewDate: null,
+      intervalDays: 0,
+      masteryLevel: 0,
+      progressPercent: 0.0,
     );
 
     await _bookmarkBox!.put(bookmark.id, bookmark);
@@ -152,14 +160,7 @@ class BookmarkService {
   }
 
   Future<void> markAsReviewed(String bookmarkId) async {
-    await initialize();
-    final bookmark = _bookmarkBox!.get(bookmarkId);
-    if (bookmark != null) {
-      bookmark.reviewCount++;
-      bookmark.lastReviewedAt = DateTime.now();
-      await bookmark.save();
-      print('📖 Bookmark reviewed: ${bookmark.text} (${bookmark.reviewCount} times)');
-    }
+    await markAsCorrect(bookmarkId);
   }
 
   Future<void> deleteBookmark(String bookmarkId) async {
@@ -190,39 +191,142 @@ class BookmarkService {
     return tags.toList()..sort();
   }
 
+  // ============ SRS METHODS ============
+
+  Future<List<Bookmark>> getCardsForToday() async {
+    await initialize();
+    final allWords = _bookmarkBox!.values.where((b) => b.type == BookmarkType.word).toList();
+
+    final cardsForToday = allWords.where((word) => word.needsReviewToday()).toList();
+
+    return cardsForToday;
+  }
+
+  Future<void> markAsCorrect(String bookmarkId) async {
+    await initialize();
+    final bookmark = _bookmarkBox!.get(bookmarkId);
+    if (bookmark == null) return;
+
+    final now = DateTime.now();
+    bookmark.lastReviewedAt = now;
+    bookmark.reviewCount = bookmark.reviewCount + 1;
+    bookmark.currentRepetition = bookmark.currentRepetition + 1;
+    bookmark.totalCorrectCount = bookmark.totalCorrectCount + 1;
+
+    bookmark.progressPercent = (bookmark.progressPercent + 10).clamp(0, 100);
+
+    if (bookmark.currentRepetition >= 3) {
+      await _advanceToNextLevel(bookmark);
+    } else {
+      await bookmark.save();
+    }
+
+    print('✅ Marked as correct: ${bookmark.text} (${bookmark.currentRepetition}/3, progress: ${bookmark.progressPercent.toStringAsFixed(0)}%)');
+  }
+
+  Future<void> markAsIncorrect(String bookmarkId) async {
+    await initialize();
+    final bookmark = _bookmarkBox!.get(bookmarkId);
+    if (bookmark == null) return;
+
+    final now = DateTime.now();
+    bookmark.lastReviewedAt = now;
+    bookmark.reviewCount = bookmark.reviewCount + 1;
+    bookmark.currentRepetition = 0;
+
+    bookmark.progressPercent = (bookmark.progressPercent - 15).clamp(0, 100);
+
+    if (bookmark.masteryLevel > 0) {
+      bookmark.masteryLevel = bookmark.masteryLevel - 1;
+      bookmark.intervalDays = _intervals[bookmark.masteryLevel];
+    }
+
+    bookmark.nextReviewDate = now;
+
+    await bookmark.save();
+    print('❌ Marked as incorrect: ${bookmark.text} (progress: ${bookmark.progressPercent.toStringAsFixed(0)}%)');
+  }
+
+  Future<void> _advanceToNextLevel(Bookmark bookmark) async {
+    final newMasteryLevel = bookmark.masteryLevel < _intervals.length - 1
+        ? bookmark.masteryLevel + 1
+        : bookmark.masteryLevel;
+
+    final intervalDays = _intervals[newMasteryLevel];
+    final nextReview = DateTime.now().add(Duration(days: intervalDays));
+
+    bookmark.masteryLevel = newMasteryLevel;
+    bookmark.intervalDays = intervalDays;
+    bookmark.nextReviewDate = nextReview;
+    bookmark.currentRepetition = 0;
+
+    bookmark.progressPercent = (bookmark.progressPercent + 5).clamp(0, 100);
+
+    await bookmark.save();
+    print('🎉 Advanced to level $newMasteryLevel: ${bookmark.text} (next: ${intervalDays}d, progress: ${bookmark.progressPercent.toStringAsFixed(0)}%)');
+  }
+
+  Future<void> resetSessionProgress(String bookmarkId) async {
+    await initialize();
+    final bookmark = _bookmarkBox!.get(bookmarkId);
+    if (bookmark == null) return;
+
+    bookmark.currentRepetition = 0;
+    await bookmark.save();
+    print('🔄 Session progress reset: ${bookmark.text}');
+  }
+
   Future<Map<String, dynamic>> getStatistics() async {
     await initialize();
     final bookmarks = _bookmarkBox!.values.toList();
+    final allWords = bookmarks.where((b) => b.type == BookmarkType.word).toList();
+
+    final dueToday = allWords.where((w) => w.needsReviewToday()).length;
+    final newWords = allWords.where((w) => w.masteryLevel == 0).length;
+    final learning = allWords.where((w) => w.masteryLevel > 0 && w.masteryLevel < 3).length;
+    final mastered = allWords.where((w) => w.masteryLevel >= 5).length;
 
     return {
       'total': bookmarks.length,
-      'words': bookmarks.where((b) => b.type == BookmarkType.word).length,
+      'words': allWords.length,
       'sentences': bookmarks.where((b) => b.type == BookmarkType.sentence).length,
       'paragraphs': bookmarks.where((b) => b.type == BookmarkType.paragraph).length,
       'favorites': bookmarks.where((b) => b.isFavorite).length,
       'reviewed': bookmarks.where((b) => b.reviewCount > 0).length,
       'totalReviews': bookmarks.fold<int>(0, (sum, b) => sum + b.reviewCount),
+      'dueToday': dueToday,
+      'new': newWords,
+      'learning': learning,
+      'mastered': mastered,
     };
   }
 
   Future<List<Map<String, dynamic>>> exportBookmarks() async {
     await initialize();
-    return _bookmarkBox!.values.map((b) => {
-      'id': b.id,
-      'bookId': b.bookId,
-      'bookTitle': b.bookTitle,
-      'type': b.type.name,
-      'text': b.text,
-      'context': b.context,
-      'translation': b.translation,
-      'sectionIndex': b.sectionIndex,
-      'pageIndex': b.pageIndex,
-      'createdAt': b.createdAt.toIso8601String(),
-      'lastReviewedAt': b.lastReviewedAt?.toIso8601String(),
-      'reviewCount': b.reviewCount,
-      'notes': b.notes,
-      'tags': b.tags,
-      'isFavorite': b.isFavorite,
+    return _bookmarkBox!.values.map((b) {
+      return {
+        'id': b.id,
+        'bookId': b.bookId,
+        'bookTitle': b.bookTitle,
+        'type': b.type.name,
+        'text': b.text,
+        'context': b.context,
+        'translation': b.translation,
+        'sectionIndex': b.sectionIndex,
+        'pageIndex': b.pageIndex,
+        'createdAt': b.createdAt.toIso8601String(),
+        'lastReviewedAt': b.lastReviewedAt?.toIso8601String(),
+        'reviewCount': b.reviewCount,
+        'notes': b.notes,
+        'tags': b.tags,
+        'isFavorite': b.isFavorite,
+        'currentRepetition': b.currentRepetition,
+        'totalCorrectCount': b.totalCorrectCount,
+        'nextReviewDate': b.nextReviewDate?.toIso8601String(),
+        'intervalDays': b.intervalDays,
+        'masteryLevel': b.masteryLevel,
+        'progressPercent': b.progressPercent,
+      };
     }).toList();
   }
 
